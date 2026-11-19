@@ -4,7 +4,10 @@ An authenticated reverse proxy for Xingchi's API. It forwards the common Anthrop
 
 ## Deploy
 
-1. Import this folder into a GitHub repository and import that repository into Vercel.
+1. Import the public GitHub repository into Vercel:
+
+   [Deploy to Vercel](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FKlyMorias%2Fxingchi-vercel-proxy)
+
 2. In Vercel Project Settings → Environment Variables, set `XINGCHI_API_KEY` to the API key from your Xingchi account.
 3. Set `PROXY_ACCESS_TOKEN` to a random secret with at least 32 characters. Generate one locally: `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`.
 4. Set `UPSTREAM_AUTH_MODE` to `authorization` or `x-api-key`, according to Xingchi's current API/account instructions. Set `MAX_OUTPUT_TOKENS` to a preferred cap from 1 to 8192; default is 2048.
