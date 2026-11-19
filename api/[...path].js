@@ -206,18 +206,30 @@ async function handler(req, res) {
   }
 
   const url = `${UPSTREAM_ORIGIN}/${path}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 50_000);
+  const abortOnClientDisconnect = () => controller.abort();
+  const abortOnResponseClose = () => {
+    if (!res.writableEnded) controller.abort();
+  };
+  req.on?.("aborted", abortOnClientDisconnect);
+  res.on?.("close", abortOnResponseClose);
   try {
     const upstream = await fetch(url, {
       method: req.method,
       headers: upstreamHeaders(req, apiKey, authMode),
       body,
       redirect: "manual",
-      signal: AbortSignal.timeout(120_000),
+      signal: controller.signal,
     });
     await writeUpstreamResponse(upstream, res);
   } catch {
     if (!res.headersSent) sendJson(res, 502, "Upstream request failed");
     else res.end();
+  } finally {
+    clearTimeout(timeout);
+    req.off?.("aborted", abortOnClientDisconnect);
+    res.off?.("close", abortOnResponseClose);
   }
 }
 
