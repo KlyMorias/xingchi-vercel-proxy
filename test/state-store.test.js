@@ -50,7 +50,7 @@ test("concurrent mutations retry compare-and-swap instead of losing updates", as
   const client = memoryBlob();
   const store = createStateStore(client, { attempts: 20, pause: async () => {} });
   await store.readState();
-  await Promise.all(Array.from({ length: 8 }, () => store.mutateState((draft) => {
+  await Promise.all(Array.from({ length: 8 }, () => createStateStore(client, { attempts: 20, pause: async () => {} }).mutateState((draft) => {
     draft.usage.test = { used: (draft.usage.test?.used || 0) + 1 };
   })));
   assert.equal((await store.readState()).usage.test.used, 8);
@@ -231,7 +231,8 @@ test("mixed real SDK conditional-conflict errors preserve all concurrent increme
         : new BlobPreconditionFailedError();
     }
   };
-  await Promise.all(Array.from({ length: 8 }, () => store.mutateState((draft) => {
+  await Promise.all(Array.from({ length: 8 }, () => createStateStore(client,
+    { attempts: 20, pause: async () => {}, warn: (entry) => logs.push(entry) }).mutateState((draft) => {
     draft.usage.counter.used++;
   })));
   assert.equal((await store.readState()).usage.counter.used, 8);

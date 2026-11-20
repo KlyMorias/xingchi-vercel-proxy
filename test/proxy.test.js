@@ -127,6 +127,9 @@ test("uses server-side credentials and the Responses upstream for a normal JSON 
   assert.equal(res.statusCode, 200);
   assert.deepEqual(JSON.parse(res.body), responseFixture());
   assert.equal(res.body.includes("upstream-secret"), false);
+  assert.match(res.headers["server-timing"], /(?:^|,\s*)quota;dur=\d+(?:\.\d+)?(?:,|$)/);
+  assert.match(res.headers["server-timing"], /(?:^|,\s*)upstream;dur=\d+(?:\.\d+)?(?:,|$)/);
+  assert.ok(res.headers["access-control-expose-headers"].toLowerCase().split(/\s*,\s*/).includes("server-timing"));
 });
 
 test("rejects unlisted paths instead of proxying arbitrary routes", async () => {
@@ -311,25 +314,58 @@ test("translates Chat Completions and its legacy token limit into Responses and 
   assert.equal(completion.usage.total_tokens, 5);
 });
 
-test("accepts a slash-separated query path produced by Vercel rewrites", async () => {
+test("serves the registered model locally after reserving the caller's minute quota", async () => {
   process.env.PROXY_ACCESS_TOKEN = "kly_" + "p".repeat(43);
   process.env.XINGCHI_API_KEY = "upstream-secret";
-  let requestedUrl;
-  global.fetch = async (url) => {
-    requestedUrl = url;
-    return new Response('{"data":[]}', {
-      headers: { "content-type": "application/json" },
-    });
-  };
+  let providerCalls = 0;
+  global.fetch = async () => { providerCalls++; throw new Error("Model discovery must not call the provider"); };
+  const reservations = [];
+  const modelHandler = handler.createHandler({ isConfigured: () => true,
+    reserve: async (token, options) => {
+      reservations.push({ token, options });
+      return { ok: true, reservation: null };
+    }, release: async () => { throw new Error("Model discovery does not reserve daily quota"); } });
 
   const res = makeResponse();
-  await handler(makeRequest({ method: "GET", path: "v1/models", headers: {
+  await modelHandler(makeRequest({ method: "GET", path: "v1/models", headers: {
     authorization: `Bearer ${process.env.PROXY_ACCESS_TOKEN}`,
   } }), res);
 
-  assert.equal(requestedUrl, "https://api.xingchiapi.com/v1/models");
+  assert.equal(providerCalls, 0);
+  assert.equal(reservations.length, 1);
+  assert.equal(reservations[0].token, process.env.PROXY_ACCESS_TOKEN);
+  assert.equal(reservations[0].options.consumeDaily, false);
   assert.equal(res.statusCode, 200);
-  assert.equal(res.body, '{"data":[]}');
+  const catalog = JSON.parse(res.body);
+  assert.equal(catalog.object, "list");
+  assert.deepEqual(catalog.data.map((model) => model.id), ["gpt-6.1-sol"]);
+  assert.equal(catalog.data[0].object, "model");
+  assert.match(res.headers["server-timing"], /(?:^|,\s*)quota;dur=\d+(?:\.\d+)?(?:,|$)/);
+  assert.doesNotMatch(res.headers["server-timing"], /upstream/);
+});
+
+test("local model discovery still rejects an invalid or exhausted API key", async () => {
+  process.env.XINGCHI_API_KEY = "upstream-secret";
+  let providerCalls = 0;
+  global.fetch = async () => { providerCalls++; throw new Error("must not be called"); };
+  for (const refusal of [
+    { ok: false, status: 401, message: "Invalid API key" },
+    { ok: false, status: 429, message: "Minute quota exceeded", retryAfter: 15 },
+  ]) {
+    const modelHandler = handler.createHandler({ isConfigured: () => true,
+      reserve: async (_token, options) => {
+        assert.equal(options.consumeDaily, false);
+        return refusal;
+      } });
+    const res = makeResponse();
+    await modelHandler(makeRequest({ method: "GET", path: ["v1", "models"], headers: {
+      authorization: "Bearer kly_" + "k".repeat(43),
+    } }), res);
+    assert.equal(res.statusCode, refusal.status);
+    assert.equal(JSON.parse(res.body).error, refusal.message);
+    if (refusal.retryAfter) assert.equal(res.headers["retry-after"], "15");
+  }
+  assert.equal(providerCalls, 0);
 });
 
 test("forwards Responses events before the upstream generation finishes", async () => {

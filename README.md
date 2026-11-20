@@ -16,7 +16,7 @@ Bir hesapta bir aktif API anahtarı bulunur; anahtar 30 gün geçerlidir ve tam 
 
 ## Kalıcı depolama ve güvenlik
 
-Hesaplar, parola hash'leri, oturum hash'leri, API anahtarı hash'leri ve kotalar özel Vercel Blob deposunda saklanır. Tam parolalar veya tam API anahtarları kalıcı depoya yazılmaz. Okumalar `useCache:false` ile en son sürümü getirir; güncellemeler ETag `ifMatch` ile karşılaştırılıp yazılır. Eşzamanlı değişiklik çakışmaları yeniden denenir; depolama arızasında erişim kapalı kalır.
+Hesaplar, parola hash'leri, oturum hash'leri, API anahtarı hash'leri ve kotalar özel Vercel Blob deposunda saklanır. Tam parolalar veya tam API anahtarları kalıcı depoya yazılmaz. Okumalar `useCache:false` ile en son sürümü getirir; güncellemeler ETag `ifMatch` ile karşılaştırılıp yazılır. Aynı çalışan sunucudaki örtüşen değişiklikler, en çok 64 işlem içeren tek kalıcı yazımda birleştirilir; ayrı sunucular arasındaki çakışmalar güncel veri yeniden okunarak denenir. Her işlem kendi doğrulamasından geçer ve başarılı sonuçlar yalnızca kalıcı yazımdan sonra döner. Hatalı işlemler diğer işlemlere kısmi değişiklik sızdırmaz; depolama arızasında erişim kapalı kalır.
 
 Bu depo, küçük ve davetli kullanıcı grupları için tek JSON kaydı kullanır. Kullanıcı üst sınırı, giriş denemesi sınırı, oturum ömrü ve kayıt boyutu kodda sınırlandırılmıştır. Daha yüksek trafik için aynı arayüz ilişkisel veritabanına taşınabilir.
 
@@ -53,6 +53,10 @@ Eşzamanlı kota yazımları ETag ile korunur. Depodan gelen hem ETag uyuşmazl�
 ## İstemci uyumluluğu
 
 Upstream'e Responses API biçiminde akışlı istek gönderilir; Chat Completions ve Anthropic Messages istek/yanıtları dönüştürülür. JSON isteyen istemcilerde tamamlanan yanıt birleştirilir; streaming isteyenler için olaylar ilgili protokole çevrilir. Kodlama istemcisi uyumlu başlıklarda KlyAPI geçidi belirtilir. Metin, görsel girdiler ve işlev araçları desteklenir. Ses, belge blokları veya dönüştürülemeyen seçenekler 400 hatası verir. Kesilen upstream akışları başarılıymış gibi gösterilmez.
+
+Doğrulanmış `response.completed` veya `response.incomplete` olayı geldiğinde yanıt hemen sonlandırılır; sağlayıcının bağlantıyı kapatması ayrıca beklenmez. `/models` yalnızca sunulan `gpt-6.1-sol` modelini, mevcut anahtar ve dakika kotası kontrollerinden sonra doğrudan döndürür. Bu liste için sağlayıcıya ek ağ isteği gönderilmez.
+
+`Server-Timing` yanıt başlığı `quota` ile kalıcı anahtar/kota kontrolünün, `upstream` ile sağlayıcıdan yanıt başlıkları alınana kadarki beklemenin milisaniye sürelerini gösterir. Başlıklar gönderildikten sonra biten aşamalar bu başlığa eklenemez. İlk gerçek metin ve toplam üretim süresi ayrıca ölçülmelidir; 8 saniyelik bağlantı bekleme verisi model yanıtı sayılmaz. Modelin düşünme ayarı değiştirilmez. Metnin tamamlanmadan görünmesi için istemci `stream: true` kullanabilir.
 
 ## Doğrulama
 

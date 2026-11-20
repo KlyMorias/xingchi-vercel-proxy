@@ -167,10 +167,15 @@ async function writeUpstreamResponse(upstream, res) {
 
 function createHandler(store = keyStore, { keepaliveIntervalMs = 8000 } = {}) {
 return async function handler(req, res) {
+  const timings = [];
+  const timing = (name, start) => {
+    timings.push(`${name};dur=${Math.max(0, performance.now() - start).toFixed(1)}`);
+    if (!res.headersSent) res.setHeader("server-timing", timings.join(", "));
+  };
   res.setHeader("access-control-allow-origin", "*");
   res.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
   res.setHeader("access-control-allow-headers", "authorization, content-type, x-api-key, x-proxy-key, anthropic-version, anthropic-beta, openai-beta, anthropic-dangerous-direct-browser-access");
-  res.setHeader("access-control-expose-headers", "retry-after, x-request-id, x-klyapi-error-source");
+  res.setHeader("access-control-expose-headers", "retry-after, x-request-id, x-klyapi-error-source, server-timing");
   if (req.method === "OPTIONS") {
     res.statusCode = 204;
     res.setHeader("allow", "GET, POST, OPTIONS");
@@ -253,10 +258,12 @@ return async function handler(req, res) {
   }
 
   let reservation;
+  const quotaStart = performance.now();
   {
     try {
       const ip = String(req.headers["x-vercel-forwarded-for"] || req.socket?.remoteAddress || "unknown").split(",")[0].trim();
       const access = await store.reserve(personalToken, { ip, consumeDaily: req.method === "POST" });
+      timing("quota", quotaStart);
       if (!access.ok) {
         if (access.retryAfter) res.setHeader("retry-after", String(access.retryAfter));
         sendJson(res, access.status || 401, access.message || "Unauthorized");
@@ -272,13 +279,23 @@ return async function handler(req, res) {
     }
   }
 
+  if (req.method === "GET") {
+    res.statusCode = 200;
+    res.setHeader("content-type", "application/json; charset=utf-8");
+    res.setHeader("cache-control", "no-store");
+    res.end(JSON.stringify({ object: "list", data: [
+      { id: "gpt-6.1-sol", object: "model", created: 0, owned_by: "klyapi" },
+    ] }));
+    return;
+  }
+
   let quotaSettled = false;
   const refund = async () => {
     if (!reservation || quotaSettled) return;
     await store.release(reservation);
     quotaSettled = true;
   };
-  const url = `${UPSTREAM_ORIGIN}/${req.method === "POST" ? "v1/responses" : path}`;
+  const url = `${UPSTREAM_ORIGIN}/v1/responses`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 280_000);
   const abortOnClientDisconnect = () => controller.abort();
@@ -290,6 +307,7 @@ return async function handler(req, res) {
   const keepalive = req.method === "POST" ? startKeepalive(res, { stream: clientStream, intervalMs: keepaliveIntervalMs }) : null;
   let phase = "fetch";
   try {
+    const upstreamStart = performance.now();
     const upstream = await fetch(url, {
       method: req.method,
       headers: upstreamHeaders(req, apiKey, authMode),
@@ -297,6 +315,7 @@ return async function handler(req, res) {
       redirect: "manual",
       signal: controller.signal,
     });
+    timing("upstream", upstreamStart);
     if (!upstream.ok) {
       diagnostics("upstream_http", { status: upstream.status });
       try { await refund(); } catch { diagnostics("refund", { reason: "storage_unavailable" }); }
@@ -310,8 +329,6 @@ return async function handler(req, res) {
         else res.end(format === "messages" ? `event: error\ndata: ${JSON.stringify({ type: "error", ...failure })}\n\n` : `data: ${JSON.stringify(failure)}\n\n`);
         await upstream.body?.cancel().catch(() => {});
       }
-    } else if (req.method === "GET") {
-      await writeUpstreamResponse(upstream, res);
     } else if (clientStream) {
       phase = "stream";
       const adapter = format === "chat" ? createChatStream("gpt-6.1-sol", { includeUsage: clientPayload.stream_options?.include_usage === true })
