@@ -78,14 +78,14 @@ test("forwards an allowed message route with server-side credentials", async () 
       "anthropic-version": "2023-06-01",
       "x-api-key": "client-token",
     },
-    body: '{"model":"example","messages":[]}',
+    body: '{"model":"gpt-6.1-sol","messages":[]}',
   }), res);
 
   assert.equal(observed.url, "https://api.xingchiapi.com/v1/messages");
   assert.equal(observed.options.headers.get("x-api-key"), "upstream-secret");
   assert.equal(observed.options.headers.get("authorization"), null);
   assert.equal(observed.options.headers.get("anthropic-version"), "2023-06-01");
-  assert.equal(observed.options.body, '{"model":"example","messages":[],"max_tokens":2048}');
+  assert.equal(observed.options.body, '{"model":"gpt-6.1-sol","messages":[],"max_tokens":2048}');
   assert.equal(res.statusCode, 200);
   assert.equal(res.body, '{"ok":true}');
   assert.equal(res.body.includes("upstream-secret"), false);
@@ -132,7 +132,7 @@ test("rejects output limits above the configured ceiling", async () => {
   await handler(makeRequest({ headers: {
     authorization: `Bearer ${process.env.PROXY_ACCESS_TOKEN}`,
     "content-type": "application/json",
-  }, body: '{"model":"example","messages":[],"max_tokens":10000}' }), res);
+  }, body: '{"model":"gpt-6.1-sol","messages":[],"max_tokens":10000}' }), res);
 
   assert.equal(res.statusCode, 400);
   assert.equal(calls, 0);
@@ -151,9 +151,9 @@ test("preserves legacy OpenAI max_tokens without adding another limit field", as
   await handler(makeRequest({ path: ["v1", "chat", "completions"], headers: {
     authorization: `Bearer ${process.env.PROXY_ACCESS_TOKEN}`,
     "content-type": "application/json",
-  }, body: '{"model":"example","messages":[],"max_tokens":300}' }), res);
+  }, body: '{"model":"gpt-6.1-sol","messages":[],"max_tokens":300}' }), res);
 
-  assert.equal(forwardedBody, '{"model":"example","messages":[],"max_tokens":300}');
+  assert.equal(forwardedBody, '{"model":"gpt-6.1-sol","messages":[],"max_tokens":300}');
 });
 
 test("accepts a slash-separated query path produced by Vercel rewrites", async () => {
@@ -205,7 +205,7 @@ test("forwards event stream chunks before the upstream stream finishes", async (
   const runningHandler = handler(makeRequest({ headers: {
     authorization: `Bearer ${process.env.PROXY_ACCESS_TOKEN}`,
     "content-type": "application/json",
-  }, body: '{"model":"example","messages":[],"stream":true}' }), res);
+  }, body: '{"model":"gpt-6.1-sol","messages":[],"stream":true}' }), res);
 
   let writeTimeout;
   let closed = false;
@@ -278,5 +278,81 @@ test("answers browser preflight without credentials or an upstream request", asy
     assert.ok(allowedHeaders.includes(name));
   }
   assert.equal(res.body, "");
+  assert.equal(calls, 0);
+});
+
+test("accepts a personal key and reserves its generation quota before forwarding", async () => {
+  process.env.XINGCHI_API_KEY = "upstream-secret";
+  const token = "kly_" + "k".repeat(43);
+  const sequence = [];
+  const personalHandler = handler.createHandler({
+    isConfigured: () => true,
+    reserve: async (key, options) => {
+      assert.equal(key, token);
+      assert.equal(options.consumeDaily, true);
+      sequence.push("reserve");
+      return { ok: true, reservation: { id: "reservation-1" } };
+    },
+    release: async () => { throw new Error("Successful calls must keep their quota"); },
+  });
+  global.fetch = async () => {
+    sequence.push("upstream");
+    return new Response("{}", { status: 200 });
+  };
+  const res = makeResponse();
+  await personalHandler(makeRequest({ path: "v1/responses", headers: {
+    authorization: `Bearer ${token}`, "content-type": "application/json",
+  }, body: '{"model":"gpt-6.1-sol","input":"hello"}' }), res);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(sequence, ["reserve", "upstream"]);
+});
+
+test("stops an exhausted personal key without spending upstream quota", async () => {
+  process.env.XINGCHI_API_KEY = "upstream-secret";
+  let calls = 0;
+  global.fetch = async () => { calls++; };
+  const personalHandler = handler.createHandler({
+    isConfigured: () => true,
+    reserve: async () => ({ ok: false, status: 429, message: "Daily quota exceeded", retryAfter: 60 }),
+  });
+  const res = makeResponse();
+  await personalHandler(makeRequest({ path: "v1/responses", headers: {
+    authorization: "Bearer kly_" + "k".repeat(43), "content-type": "application/json",
+  }, body: '{"input":"hello"}' }), res);
+  assert.equal(res.statusCode, 429);
+  assert.equal(res.headers["retry-after"], "60");
+  assert.equal(calls, 0);
+});
+
+test("refunds personal daily quota when the provider denies a request", async () => {
+  process.env.XINGCHI_API_KEY = "upstream-secret";
+  const released = [];
+  global.fetch = async () => new Response('{"error":{"code":"client_not_allowed"}}', { status: 403 });
+  const personalHandler = handler.createHandler({
+    isConfigured: () => true,
+    reserve: async () => ({ ok: true, reservation: { id: "request-2" } }),
+    release: async (reservation) => released.push(reservation.id),
+  });
+  const res = makeResponse();
+  await personalHandler(makeRequest({ path: "v1/responses", headers: {
+    authorization: "Bearer kly_" + "k".repeat(43), "content-type": "application/json",
+  }, body: '{"input":"hello"}' }), res);
+  assert.equal(res.statusCode, 403);
+  assert.deepEqual(released, ["request-2"]);
+});
+
+test("fails closed if the quota database is unavailable", async () => {
+  process.env.XINGCHI_API_KEY = "upstream-secret";
+  let calls = 0;
+  global.fetch = async () => { calls++; };
+  const personalHandler = handler.createHandler({
+    isConfigured: () => true,
+    reserve: async () => { throw new Error("Redis unavailable"); },
+  });
+  const res = makeResponse();
+  await personalHandler(makeRequest({ method: "GET", path: "v1/models", headers: {
+    authorization: "Bearer kly_" + "k".repeat(43),
+  } }), res);
+  assert.equal(res.statusCode, 503);
   assert.equal(calls, 0);
 });

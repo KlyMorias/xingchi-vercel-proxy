@@ -1,5 +1,13 @@
 {
   "rewrites": [
+    { "source": "/", "destination": "/key.html" },
+    { "source": "/key", "destination": "/key.html" },
+    { "source": "/api", "destination": "/api/status" },
+    { "source": "/api/", "destination": "/api/status" },
+    { "source": "/api/models", "destination": "/api/proxy?path=v1/models" },
+    { "source": "/api/messages", "destination": "/api/proxy?path=v1/messages" },
+    { "source": "/api/chat/completions", "destination": "/api/proxy?path=v1/chat/completions" },
+    { "source": "/api/responses", "destination": "/api/proxy?path=v1/responses" },
     { "source": "/v1/models", "destination": "/api/proxy?path=v1/models" },
     { "source": "/v1/messages", "destination": "/api/proxy?path=v1/messages" },
     { "source": "/v1/chat/completions", "destination": "/api/proxy?path=v1/chat/completions" },
@@ -8,6 +16,16 @@
     { "source": "/api/v1/messages", "destination": "/api/proxy?path=v1/messages" },
     { "source": "/api/v1/chat/completions", "destination": "/api/proxy?path=v1/chat/completions" },
     { "source": "/api/v1/responses", "destination": "/api/proxy?path=v1/responses" }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "Referrer-Policy", "value": "same-origin" },
+        { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" }
+      ]
+    }
   ],
   "functions": {
     "api/**/*.js": {

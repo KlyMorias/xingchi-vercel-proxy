@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0b0d13">
+    <meta name="description" content="KlyAPI anahtarını oluştur, kullanımını takip et ve uygulamanı bağla.">
+    <title>API Anahtarın · KlyAPI</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='17' fill='%237c8dff'/%3E%3Cpath d='M19 16v32m26-32L28 32l17 16' fill='none' stroke='%230b0d13' stroke-width='7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+    <link rel="stylesheet" href="/assets/key.css">
+    <script src="/assets/key.js" defer></script>
+  </head>
+  <body>
+    <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="8" r="4.5"/><path d="m11.3 11.3 9.2 9.2M16 16l2.5-2.5M18.5 18.5l2-2"/></symbol>
+      <symbol id="i-code" viewBox="0 0 24 24"><path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-16-2 20"/></symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M15 8V4a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h4"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 4v16M4 12h16"/></symbol>
+      <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7V2m0 5h-5M4 17v5m0-5h5M20 7a9 9 0 0 0-16 2m0 8a9 9 0 0 0 16-2"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7"/></symbol>
+      <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v.1"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+      <symbol id="i-bolt" viewBox="0 0 24 24"><path d="m13 2-9 12h7l-1 8 10-12h-7l1-8Z"/></symbol>
+      <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+    </svg>
+
+    <aside class="sidebar" aria-label="Konsol menüsü">
+      <a class="brand" href="/key" aria-label="KlyAPI anahtar paneli"><span class="brand-mark">K<span>↗</span></span><span>Kly<span class="brand-light">API</span><span class="brand-dot">.</span></span></a>
+      <span class="sidebar-caption">GELİŞTİRİCİ</span>
+      <nav>
+        <a class="nav-link current" href="#anahtar"><svg><use href="#i-key"/></svg><span>API anahtarın</span><span class="nav-indicator"></span></a>
+        <a class="nav-link" href="#baslarken"><svg><use href="#i-code"/></svg><span>Hızlı başlangıç</span><span class="nav-shortcut">↗</span></a>
+      </nav>
+      <div class="sidebar-note"><span class="small-orb"></span><div><strong>Küçük fikirler, büyük işler.</strong><p>Bir sonraki projen burada başlasın.</p></div></div>
+      <div class="workspace"><span class="workspace-avatar">K</span><div><strong>Kişisel alan</strong><span>Ücretsiz plan</span></div></div>
+    </aside>
+
+    <div class="app-shell">
+      <header class="topbar"><div class="breadcrumb">Konsol<span>/</span><strong>API anahtarın</strong></div><span class="plan-badge"><span></span>Ücretsiz erişim</span></header>
+      <main>
+        <section class="page-heading" aria-labelledby="page-title">
+          <div><span class="eyebrow">GELİŞTİRMEK İÇİN BİR BAŞLANGIÇ</span><h1 id="page-title">Fikrini API’ye bağla<span>.</span></h1><p>Kendi anahtarını oluştur. Uygulamana ekle. Kullanımını buradan takip et.</p></div>
+          <div class="heading-graphic" aria-hidden="true"><span class="graphic-grid"></span><svg><use href="#i-key"/></svg><span class="graphic-spark spark-one">+</span><span class="graphic-spark spark-two">+</span></div>
+        </section>
+
+        <section class="service-notice" id="service-notice" aria-label="Hizmet durumu"><span class="notice-icon"><svg><use href="#i-info"/></svg></span><div><strong id="service-title">Üretim erişimi bekleniyor</strong><p id="service-message">Sağlayıcı genel istemci erişimini henüz açmadı.</p></div><span class="notice-status" id="service-tag">Sağlayıcı kısıtlaması</span></section>
+
+        <div class="stat-grid" aria-label="Kullanım özeti">
+          <article class="stat-card"><div class="stat-label">Günlük kullanım<svg><use href="#i-grid"/></svg></div><div class="stat-value"><span id="usage-count">—</span><span class="stat-denominator"> / <span id="daily-limit">50</span></span><span class="stat-unit">istek</span></div><div class="usage-track" role="progressbar" id="usage-progress" aria-label="Günlük kullanılan istekler" aria-valuemin="0" aria-valuemax="50" aria-valuenow="0"><span id="usage-fill"></span></div><span class="stat-foot" id="remaining-label">Kullanım bilgileri yükleniyor</span></article>
+          <article class="stat-card"><div class="stat-label">Hız sınırı<svg><use href="#i-bolt"/></svg></div><div class="stat-value"><span id="minute-limit">5</span><span class="stat-unit">istek / dakika</span></div><span class="stat-foot spaced-foot">Anahtarına özel kullanım sınırı</span></article>
+          <article class="stat-card model-card"><div class="stat-label">Kullanılabilir model<svg><use href="#i-code"/></svg></div><div class="model-value"><span class="model-glyph">G</span><span id="model-name">gpt-6.1-sol</span></div><span class="stat-foot spaced-foot"><span class="model-dot"></span>Responses API</span></article>
+        </div>
+
+        <section class="panel key-panel" id="anahtar" aria-labelledby="key-heading">
+          <div class="panel-heading"><div class="heading-with-icon"><span class="panel-icon"><svg><use href="#i-key"/></svg></span><div><h2 id="key-heading">API anahtarın</h2><p>Uygulamalarında kullanacağın kişisel erişim anahtarı.</p></div></div><span class="outline-badge" id="key-badge">Yükleniyor</span></div>
+          <div class="message-box" id="message-box" role="status" aria-live="polite" hidden></div>
+          <div class="key-loading" id="key-loading"><span class="spinner"></span> Anahtar bilgileri yükleniyor…</div>
+          <div class="empty-state" id="key-error" role="alert" hidden><div class="empty-key-icon"><svg><use href="#i-info"/></svg></div><h3 id="key-error-title">Anahtar bilgileri alınamadı</h3><p id="key-error-description">Bağlantını kontrol edip yeniden deneyebilirsin.</p><button class="button subtle" type="button" id="retry-keys"><svg><use href="#i-refresh"/></svg>Yeniden dene</button></div>
+          <div class="empty-state" id="key-empty" hidden><div class="empty-key-icon"><svg><use href="#i-key"/></svg><span>+</span></div><h3>İlk anahtarınla başla</h3><p>Tek tıkla ücretsiz bir API anahtarı oluştur.<br>Uygulamana bağlamak için ihtiyacın olan her şey burada.</p><button class="button primary" type="button" id="create-key"><svg><use href="#i-plus"/></svg>Anahtar oluştur<svg class="button-arrow"><use href="#i-arrow"/></svg></button><span class="empty-foot">30 gün geçerli · Günlük <span id="empty-daily-limit">50</span> istek</span></div>
+          <div class="active-key" id="key-active" hidden>
+            <div class="key-name-row"><div><span class="key-name">Kişisel API anahtarı</span><span class="key-date" id="key-created"></span></div><span class="active-label"><span></span>Aktif</span></div>
+            <div class="secret-field"><code id="key-value" aria-label="API anahtarı">••••••••••••••••••••••••••••••</code><div class="secret-actions"><button class="icon-button" id="reveal-key" type="button" title="Anahtarı göster" aria-label="Anahtarı göster" hidden><svg><use href="#i-eye"/></svg></button><button class="icon-button" id="copy-key" type="button" title="Anahtarı kopyala" aria-label="Anahtarı kopyala" hidden><svg><use href="#i-copy"/></svg></button></div></div>
+            <p class="key-help" id="key-help"><svg><use href="#i-info"/></svg><span>Anahtarın tamamı yalnızca oluşturulduğunda gösterilir.</span></p>
+            <div class="key-bottom"><span class="expiry-text" id="key-expiry"></span><div class="key-management"><button class="button subtle" type="button" id="rotate-key"><svg><use href="#i-refresh"/></svg>Yenile</button><button class="button danger" type="button" id="revoke-key"><svg><use href="#i-trash"/></svg>İptal et</button></div></div>
+          </div>
+          <div class="panel-footer"><svg><use href="#i-info"/></svg><span>Anahtar yönetimi bu tarayıcıya bağlıdır. Anahtarını yalnızca güvendiğin uygulamalarda kullan.</span></div>
+        </section>
+
+        <section class="quickstart" id="baslarken" aria-labelledby="start-heading">
+          <div class="section-heading"><div><span class="eyebrow">DAKİKALAR İÇİNDE BAĞLAN</span><h2 id="start-heading">İlk isteğini hazırla</h2></div><span class="step-count">01 — 02</span></div>
+          <div class="connection-grid">
+            <article class="panel connection-panel"><span class="step-label"><span>01</span>İstemcini ayarla</span><p class="connection-description">OpenAI uyumlu uygulamanda aşağıdaki bilgileri kullan. Arayüz seçeneği varsa <strong>Responses API</strong> seç.</p><label class="config-label" for="base-url">Base URL</label><div class="config-field"><input id="base-url" type="text" readonly value="https://klyapi.vercel.app/api/v1" spellcheck="false"><button class="icon-button" type="button" data-copy-target="base-url" title="Base URL’yi kopyala" aria-label="Base URL’yi kopyala"><svg><use href="#i-copy"/></svg></button></div><label class="config-label" for="model-id">Model</label><div class="config-field"><input id="model-id" type="text" readonly value="gpt-6.1-sol" spellcheck="false"><button class="icon-button" type="button" data-copy-target="model-id" title="Modeli kopyala" aria-label="Modeli kopyala"><svg><use href="#i-copy"/></svg></button></div><p class="connection-note">API key alanına yukarıda oluşturduğun anahtarı gir.</p></article>
+            <article class="panel code-panel"><div class="code-heading"><span class="step-label"><span>02</span>Bir istek gönder</span><button class="code-copy" type="button" id="copy-example"><svg><use href="#i-copy"/></svg>Kopyala</button></div><div class="code-language"><span></span>cURL<span class="file-name">ilk-istek.sh</span></div><pre><code id="code-example">curl https://klyapi.vercel.app/api/v1/responses \
+  -H "Authorization: Bearer YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-6.1-sol",
+    "input": "Merhaba!",
+    "max_output_tokens": 256
+  }'</code></pre><div class="code-bottom"><span class="code-dot"></span><span>Örnek, kendi anahtarınla otomatik güncellenir.</span></div></article>
+          </div>
+        </section>
+        <footer class="page-footer"><a class="footer-brand" href="/key">KlyAPI<span>.</span></a><span>Bir fikirle başlar.</span><a href="#anahtar">Anahtarıma dön <span>↑</span></a></footer>
+      </main>
+    </div>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden><svg><use href="#i-check"/></svg><span></span></div>
+    <noscript><div class="noscript-warning">Anahtar oluşturmak ve kullanımını görmek için JavaScript’i etkinleştir.</div></noscript>
+  </body>
+</html>

@@ -1,37 +1,45 @@
-# Xingchi API proxy for Vercel
+# KlyAPI
 
-An authenticated reverse proxy for Xingchi's API. It forwards API requests to the fixed origin `https://api.xingchiapi.com`. The Xingchi key stays on the server; callers use a separate proxy token. This proxy preserves upstream errors and permissions. It does not impersonate an approved coding client.
+Vercel üzerinde çalışan kişisel API anahtarı paneli ve Xingchi API geçidi.
 
-## Deploy
+- `/key`: tarayıcıya bağlı anonim oturumla anahtar oluşturma, tek seferlik gösterme, kullanım görüntüleme, yenileme ve iptal.
+- `/`: aynı anahtar paneli.
+- `/api`: JSON hizmet bilgisi.
+- `/api/v1`: OpenAI uyumlu istemciler için Base URL. `/api/responses` gibi kısa yollar ve önceki `/v1` yolları da desteklenir.
+- Model: `gpt-6.1-sol`.
 
-1. Import the public GitHub repository into Vercel:
+Kişisel anahtarlar 30 gün geçerlidir. Her anonim oturumda bir aktif anahtar bulunur. Günlük üretim kotası 50, dakikalık çağrı sınırı 5'tir. Anahtar yenilemek oturumun kullanım sayaçlarını sıfırlamaz. Hatalı upstream yanıtları günlük kotadan iade edilir; hız sınırı korunur. Model listesi günlük üretim kotasını tüketmez. Sayaçlar UTC gün sınırında yenilenir.
 
-   [Deploy to Vercel](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FKlyMorias%2Fxingchi-vercel-proxy)
+## Kalıcı veri ve kurulum
 
-2. In Vercel Project Settings → Environment Variables, set `XINGCHI_API_KEY` to the API key from your Xingchi account.
-3. Set `PROXY_ACCESS_TOKEN` to a random secret with at least 32 characters. Generate one locally: `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`.
-4. Set `UPSTREAM_AUTH_MODE` to `authorization` or `x-api-key`, according to Xingchi's current API/account instructions. Set `MAX_OUTPUT_TOKENS` to a preferred cap from 1 to 8192; default is 2048.
-5. Redeploy and test before sharing the URL.
+Kişisel anahtarlar ve sayaçlar Upstash Redis'te tutulur. API anahtarlarının tamamı ve IP adresleri veritabanına yazılmaz; yalnızca hash'ler, kısa anahtar ön eki, oluşturma/son kullanım tarihleri ve sayaçlar saklanır. Aynı IP'den günlük en fazla üç anahtar oluşturulabilir. Bu, hesap doğrulaması içermeyen anonim bir başlangıç sistemidir; tarayıcı verileri silinirse yönetim oturumu kaybolur.
 
-Never place `XINGCHI_API_KEY` in frontend code or a public GitHub repo. Do not publish `PROXY_ACCESS_TOKEN`: anyone who has it can use the shared Xingchi quota. This starter has shared-token access only; it does not provide per-user accounts, billing, or durable quotas. Add those before turning it into a public paid service.
+Tüm doğrulama, iptal ve kota kararları Redis'te tek atomik Lua işlemiyle yapılır. Veritabanına ulaşılamadığında kişisel anahtar erişimi kapalı kalır. Ücretsiz plan ve tek birincil bölge kullanılır; otomatik ücretli plan yükseltmesi kapalı olmalıdır.
 
-## Client configuration
+Vercel ortam değişkenleri:
 
-Client base URLs:
+| Değişken | Amaç |
+| --- | --- |
+| `XINGCHI_API_KEY` | Upstream anahtarı, yalnızca sunucuda Secret olarak |
+| `KEY_HASH_SECRET` | Oturum ve IP hash'leri için en az 32 karakterlik ayrı sır |
+| `KV_REST_API_URL`, `KV_REST_API_TOKEN` | Vercel Upstash bağlantısının Redis REST bilgileri |
+| `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | Yukarıdaki Redis değişkenlerine alternatif |
+| `PROXY_ACCESS_TOKEN` | Önceki sahip erişim anahtarı; kişisel kota dışında sahibin özel erişimi |
+| `UPSTREAM_AUTH_MODE` | `authorization` (varsayılan) veya `x-api-key` |
+| `MAX_OUTPUT_TOKENS` | Çağrı başına çıktı sınırı, varsayılan 2048, en çok 8192 |
 
-- Anthropic-compatible clients: base URL `https://YOUR-DEPLOYMENT.vercel.app`
-- OpenAI-compatible clients: base URL `https://YOUR-DEPLOYMENT.vercel.app/v1`
+Vercel CLI ile ücretsiz Redis oluşturma:
 
-The earlier `/api` and `/api/v1` base URLs are also supported. Explicit rewrites route both prefixes to a single Vercel Node function.
+```sh
+vercel integration add upstash/upstash-kv --name klyapi-keys --billing-plan free --meta primaryRegion=fra1 --meta eviction=false --meta prodPack=false --meta autoUpgrade=false --environment production --no-env-pull
+```
 
-Supported requests: `GET /v1/models`, `POST /v1/messages`, `POST /v1/chat/completions`, `POST /v1/responses`. The proxy forwards streaming responses and the documented protocol headers. Requests without a requested output limit receive the configured default; larger limits are rejected.
+İlk kurulumda Vercel, Upstash sözleşmesinin hesap sahibi tarafından kabulünü ister. Bu adım tamamlanmadan kişisel anahtar oluşturma çalışmaz. Kaynak kodu ve sır içermeyen panel yayımlanabilir. Ortam değişkenlerinden sonra `vercel deploy --prod --yes` ile yeniden dağıt.
 
-## Observed upstream restrictions
+## Mevcut sağlayıcı kısıtlaması
 
-On 20 November 2026, an authenticated direct probe returned a model list, but the provider returned `chat_completions_disabled` for Chat Completions and `client_not_allowed` for a standard Responses API request. A hosted relay does not remove this provider restriction. Use only endpoints and client access authorized by your Xingchi account; a successful model-list request does not prove text generation is enabled for general SDK clients.
+20 Kasım 2026'da model listesi çalıştı; standart Responses API isteği upstream'den `403 client_not_allowed`, Chat Completions isteği `chat_completions_disabled` aldı. Panel bu durumu açıkça gösterir. Geçit sağlayıcı izinlerini değiştirmez ve onaylı bir kodlama istemcisinin kimliğini taklit etmez.
 
-Configure the client with `PROXY_ACCESS_TOKEN` as its API key. The proxy replaces caller credentials with `XINGCHI_API_KEY` upstream. Your target application must let you set a custom base URL and use the matching request protocol. This cannot turn an API key into a separate product login or make an incompatible protocol work automatically.
+## Kontrol
 
-## Verify
-
-Run `npm test` with Node.js 20 or newer. Deploy with the Vercel dashboard or Vercel CLI. Do not use an upstream API key in the test environment.
+Node.js 20 veya üzerinde `npm test`. Testler kimlik doğrulama, JSON boyut sınırı, streaming, upstream hataları, Redis arızasında erişimin kapanması, tek seferlik anahtar gösterimi, origin kontrolü, kota rezervasyonu ve hata iadesini kapsar. Gerçek Redis bağlantısıyla eşzamanlı kota ve iptal akışı da dağıtım sonrasında doğrulanmalıdır.

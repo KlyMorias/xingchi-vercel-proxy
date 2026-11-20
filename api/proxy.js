@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const keyStore = require("../lib/key-store");
 
 const UPSTREAM_ORIGIN = "https://api.xingchiapi.com";
 const MAX_BODY_BYTES = 1_000_000;
@@ -156,7 +157,8 @@ async function writeUpstreamResponse(upstream, res) {
   }
 }
 
-async function handler(req, res) {
+function createHandler(store = keyStore) {
+return async function handler(req, res) {
   res.setHeader("access-control-allow-origin", "*");
   res.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
   res.setHeader("access-control-allow-headers", "authorization, content-type, x-api-key, x-proxy-key, anthropic-version, anthropic-beta, openai-beta, anthropic-dangerous-direct-browser-access");
@@ -179,12 +181,16 @@ async function handler(req, res) {
   }
 
   const expectedProxyToken = process.env.PROXY_ACCESS_TOKEN;
-  if (!expectedProxyToken || expectedProxyToken.length < 32) {
-    sendJson(res, 503, "Proxy authentication is not configured");
+  const credentials = requestCredentials(req);
+  const isOwner = expectedProxyToken?.length >= 32
+    && credentials.some((value) => isEqualSecret(value, expectedProxyToken));
+  const personalToken = credentials.find((value) => /^kly_[A-Za-z0-9_-]{43}$/.test(value));
+  if (!isOwner && !personalToken) {
+    sendJson(res, 401, "Unauthorized");
     return;
   }
-  if (!requestCredentials(req).some((value) => isEqualSecret(value, expectedProxyToken))) {
-    sendJson(res, 401, "Unauthorized");
+  if (!isOwner && !store.isConfigured()) {
+    sendJson(res, 503, "Key service is not configured");
     return;
   }
 
@@ -203,13 +209,45 @@ async function handler(req, res) {
       return;
     }
     try {
-      body = enforceOutputLimit(await readJsonBody(req), path);
+      const payload = await readJsonBody(req);
+      if (payload.model && payload.model !== "gpt-6.1-sol") {
+        sendJson(res, 400, "Only gpt-6.1-sol is available");
+        return;
+      }
+      if (payload.n !== undefined && payload.n !== 1) {
+        sendJson(res, 400, "Only one output per request is supported");
+        return;
+      }
+      body = enforceOutputLimit({ ...payload, model: "gpt-6.1-sol" }, path);
     } catch (error) {
       sendJson(res, error.statusCode || 400, error.message);
       return;
     }
   }
 
+  let reservation;
+  if (!isOwner) {
+    try {
+      const ip = String(req.headers["x-vercel-forwarded-for"] || req.socket?.remoteAddress || "unknown").split(",")[0].trim();
+      const access = await store.reserve(personalToken, { ip, consumeDaily: req.method === "POST" });
+      if (!access.ok) {
+        if (access.retryAfter) res.setHeader("retry-after", String(access.retryAfter));
+        sendJson(res, access.status || 401, access.message || "Unauthorized");
+        return;
+      }
+      reservation = access.reservation;
+    } catch {
+      sendJson(res, 503, "Key service is temporarily unavailable");
+      return;
+    }
+  }
+
+  let quotaSettled = false;
+  const refund = async () => {
+    if (!reservation || quotaSettled) return;
+    quotaSettled = true;
+    await store.release(reservation);
+  };
   const url = `${UPSTREAM_ORIGIN}/${path}`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 50_000);
@@ -227,16 +265,20 @@ async function handler(req, res) {
       redirect: "manual",
       signal: controller.signal,
     });
+    if (!upstream.ok) await refund();
     await writeUpstreamResponse(upstream, res);
   } catch {
-    if (!res.headersSent) sendJson(res, 502, "Upstream request failed");
-    else res.end();
+    try { await refund(); } catch { /* Reserved requests expire at the daily reset. */ }
+    if (!res.destroyed && !res.headersSent) sendJson(res, 502, "Upstream request failed");
+    else if (!res.destroyed) res.end();
   } finally {
     clearTimeout(timeout);
     req.off?.("aborted", abortOnClientDisconnect);
     res.off?.("close", abortOnResponseClose);
   }
+};
 }
 
-module.exports = handler;
+module.exports = createHandler();
+module.exports.createHandler = createHandler;
 module.exports.config = { api: { bodyParser: false } };
