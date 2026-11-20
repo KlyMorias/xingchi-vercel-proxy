@@ -69,6 +69,10 @@ function eventFrame(event) {
 
 const originalFetch = global.fetch;
 const originalEnv = { ...process.env };
+test.beforeEach(() => {
+  delete process.env.MAX_OUTPUT_TOKENS;
+  delete process.env.DEFAULT_OUTPUT_TOKENS;
+});
 test.afterEach(() => {
   global.fetch = originalFetch;
   process.env = { ...originalEnv };
@@ -159,6 +163,7 @@ test("rejects request bodies above the fixed size limit", async () => {
 test("rejects output limits above the configured ceiling", async () => {
   process.env.PROXY_ACCESS_TOKEN = "kly_" + "a".repeat(43);
   process.env.XINGCHI_API_KEY = "upstream-secret";
+  process.env.MAX_OUTPUT_TOKENS = "2048";
   let calls = 0;
   global.fetch = async () => { calls++; };
 
@@ -166,8 +171,113 @@ test("rejects output limits above the configured ceiling", async () => {
   await handler(makeRequest({ headers: {
     authorization: `Bearer ${process.env.PROXY_ACCESS_TOKEN}`,
     "content-type": "application/json",
-  }, body: '{"model":"gpt-6.1-sol","messages":[],"max_tokens":10000}' }), res);
+  }, body: '{"model":"gpt-6.1-sol","input":"hello","max_output_tokens":10000}' }), res);
 
+  assert.equal(res.statusCode, 400);
+  assert.equal(calls, 0);
+});
+
+test("forwards explicit large output limits across all supported request formats when no cap is configured", async () => {
+  process.env.XINGCHI_API_KEY = "upstream-secret";
+  const token = "kly_" + "p".repeat(43);
+  const cases = [
+    { path: "v1/responses", payload: { input: "hello", max_output_tokens: 32768 } },
+    { path: "v1/chat/completions", payload: { messages: [{ role: "user", content: "hello" }], max_completion_tokens: 32768 } },
+    { path: "v1/chat/completions", payload: { messages: [{ role: "user", content: "hello" }], max_tokens: 32768 } },
+    { path: "v1/messages", payload: { messages: [{ role: "user", content: "hello" }], max_tokens: 32768 } },
+  ];
+  const forwarded = [];
+  global.fetch = async (_url, options) => {
+    forwarded.push(JSON.parse(options.body));
+    return successfulResponse();
+  };
+  for (const item of cases) {
+    const res = makeResponse();
+    await handler(makeRequest({ path: item.path, headers: {
+      authorization: `Bearer ${token}`, "content-type": "application/json",
+    }, body: JSON.stringify(item.payload) }), res);
+    assert.equal(res.statusCode, 200, item.path + ": " + res.body);
+  }
+  assert.equal(forwarded.length, cases.length);
+  assert.ok(forwarded.every((payload) => payload.max_output_tokens === 32768));
+});
+
+test("uses a configurable output default only when the client omits a limit and bounds it by an optional cap", async () => {
+  process.env.XINGCHI_API_KEY = "upstream-secret";
+  const token = "kly_" + "p".repeat(43);
+  const forwarded = [];
+  global.fetch = async (_url, options) => {
+    forwarded.push(JSON.parse(options.body).max_output_tokens);
+    return successfulResponse();
+  };
+  const check = async (payload = { input: "hello" }) => {
+    const res = makeResponse();
+    await handler(makeRequest({ headers: {
+      authorization: `Bearer ${token}`, "content-type": "application/json",
+    }, body: JSON.stringify(payload) }), res);
+    assert.equal(res.statusCode, 200, res.body);
+  };
+  await check();
+  process.env.DEFAULT_OUTPUT_TOKENS = "4096";
+  await check();
+  process.env.MAX_OUTPUT_TOKENS = "3072";
+  await check();
+  await check({ input: "hello", max_output_tokens: 1024 });
+  process.env.DEFAULT_OUTPUT_TOKENS = "32768";
+  process.env.MAX_OUTPUT_TOKENS = "65536";
+  await check({ input: "hello", max_output_tokens: 49152 });
+  await check();
+  assert.deepEqual(forwarded, [2048, 4096, 3072, 1024, 49152, 32768]);
+});
+
+test("rejects invalid explicit token limits without contacting the provider", async () => {
+  process.env.XINGCHI_API_KEY = "upstream-secret";
+  let calls = 0;
+  global.fetch = async () => { calls++; throw new Error("must not be called"); };
+  for (const limit of [0, -1, 1.5, "32768"]) {
+    for (const request of [
+      { path: "v1/responses", payload: { input: "hello", max_output_tokens: limit } },
+      { path: "v1/chat/completions", payload: { messages: [{ role: "user", content: "hello" }], max_completion_tokens: limit } },
+      { path: "v1/chat/completions", payload: { messages: [{ role: "user", content: "hello" }], max_tokens: limit } },
+      { path: "v1/messages", payload: { messages: [{ role: "user", content: "hello" }], max_tokens: limit } },
+    ]) {
+      const res = makeResponse();
+      await handler(makeRequest({ path: request.path, headers: {
+        authorization: "Bearer kly_" + "p".repeat(43), "content-type": "application/json",
+      }, body: JSON.stringify(request.payload) }), res);
+      assert.equal(res.statusCode, 400, `${request.path} accepted ${JSON.stringify(limit)}`);
+    }
+  }
+  assert.equal(calls, 0);
+});
+
+test("fails closed for invalid configured output defaults or caps", async () => {
+  process.env.XINGCHI_API_KEY = "upstream-secret";
+  let calls = 0;
+  global.fetch = async () => { calls++; throw new Error("must not be called"); };
+  for (const name of ["DEFAULT_OUTPUT_TOKENS", "MAX_OUTPUT_TOKENS"]) {
+    for (const value of ["0", "-1", "1.5", "invalid", "9007199254740992"]) {
+      delete process.env.DEFAULT_OUTPUT_TOKENS;
+      delete process.env.MAX_OUTPUT_TOKENS;
+      process.env[name] = value;
+      const res = makeResponse();
+      await handler(makeRequest({ headers: {
+        authorization: "Bearer kly_" + "p".repeat(43), "content-type": "application/json",
+      }, body: '{"input":"hello","max_output_tokens":32}' }), res);
+      assert.equal(res.statusCode, 503, name + "=" + value + ": " + res.body);
+    }
+  }
+  assert.equal(calls, 0);
+});
+
+test("rejects conflicting Chat token limit fields without contacting the provider", async () => {
+  process.env.XINGCHI_API_KEY = "upstream-secret";
+  let calls = 0;
+  global.fetch = async () => { calls++; throw new Error("must not be called"); };
+  const res = makeResponse();
+  await handler(makeRequest({ path: "v1/chat/completions", headers: {
+    authorization: "Bearer kly_" + "p".repeat(43), "content-type": "application/json",
+  }, body: JSON.stringify({ messages: [{ role: "user", content: "hello" }], max_tokens: 1024, max_completion_tokens: 2048 }) }), res);
   assert.equal(res.statusCode, 400);
   assert.equal(calls, 0);
 });

@@ -79,10 +79,16 @@ async function readJsonBody(req) {
 }
 
 function enforceOutputLimit(payload, path) {
-  const configuredLimit = Number(process.env.MAX_OUTPUT_TOKENS || 2048);
-  const outputLimit = Number.isSafeInteger(configuredLimit) && configuredLimit > 0
-    ? Math.min(configuredLimit, 8192)
-    : 2048;
+  const configuredMax = process.env.MAX_OUTPUT_TOKENS?.trim();
+  const configuredDefault = process.env.DEFAULT_OUTPUT_TOKENS?.trim();
+  const outputLimit = configuredMax ? Number(configuredMax) : null;
+  const defaultLimit = configuredDefault ? Number(configuredDefault) : 2048;
+  if (!Number.isSafeInteger(defaultLimit) || defaultLimit < 1 ||
+      (outputLimit !== null && (!Number.isSafeInteger(outputLimit) || outputLimit < 1))) {
+    const error = new Error("Proxy output token configuration is invalid");
+    error.statusCode = 503;
+    throw error;
+  }
   const bounded = { ...payload };
   const fields = path === "v1/messages"
     ? ["max_tokens"]
@@ -91,7 +97,7 @@ function enforceOutputLimit(payload, path) {
       : ["max_completion_tokens", "max_tokens"];
 
   if (fields.every((field) => bounded[field] === undefined)) {
-    bounded[fields[0]] = outputLimit;
+    bounded[fields[0]] = outputLimit === null ? defaultLimit : Math.min(defaultLimit, outputLimit);
   }
   for (const field of fields) {
     if (bounded[field] === undefined) continue;
@@ -100,7 +106,7 @@ function enforceOutputLimit(payload, path) {
       error.statusCode = 400;
       throw error;
     }
-    if (bounded[field] > outputLimit) {
+    if (outputLimit !== null && bounded[field] > outputLimit) {
       const error = new Error(`Requested output exceeds the ${outputLimit}-token proxy limit`);
       error.statusCode = 400;
       throw error;
