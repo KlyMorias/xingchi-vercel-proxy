@@ -1,8 +1,4 @@
-const crypto = require("node:crypto");
-const net = require("node:net");
 const store = require("../lib/key-store.js");
-
-const SESSION_LIFETIME = 30 * 24 * 60 * 60;
 const MAX_BODY_BYTES = 1024;
 
 function sendJson(res, status, body) {
@@ -15,19 +11,6 @@ function requestError(status, code, message) {
   return Object.assign(new Error(message), { status, code });
 }
 
-function sessionFrom(req) {
-  const cookie = req.headers.cookie;
-  if (typeof cookie !== "string") return null;
-  const match = cookie.match(/(?:^|;\s*)kly_session=([A-Za-z0-9_-]{43})(?:;|$)/);
-  return match ? match[1] : null;
-}
-
-function newSession(res) {
-  const id = crypto.randomBytes(32).toString("base64url");
-  res.setHeader("set-cookie", `kly_session=${id}; Path=/; Max-Age=${SESSION_LIFETIME}; HttpOnly; Secure; SameSite=Strict`);
-  return id;
-}
-
 function sameOrigin(req) {
   const origin = req.headers.origin;
   const host = req.headers.host;
@@ -37,14 +20,6 @@ function sameOrigin(req) {
     return origin === parsed.origin && parsed.protocol === "https:" && parsed.host.toLowerCase() === host.toLowerCase()
       && req.headers["sec-fetch-site"] !== "cross-site";
   } catch { return false; }
-}
-
-function clientIp(req) {
-  const forwarded = req.headers["x-vercel-forwarded-for"];
-  let ip = typeof forwarded === "string" ? forwarded.split(",")[0].trim() : req.socket?.remoteAddress;
-  if (typeof ip !== "string") return "unknown";
-  if (ip.startsWith("::ffff:") && net.isIP(ip.slice(7)) === 4) ip = ip.slice(7);
-  return net.isIP(ip) ? ip.toLowerCase() : "unknown";
 }
 
 async function readBody(req, allowEmpty) {
@@ -91,7 +66,8 @@ async function readBody(req, allowEmpty) {
   }
 }
 
-async function handler(req, res) {
+function createHandler(keyStore = store, authProvider = null) {
+return async function handler(req, res) {
   res.setHeader("cache-control", "private, no-store");
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("vary", "Cookie, Origin");
@@ -104,30 +80,33 @@ async function handler(req, res) {
     sendJson(res, 403, { error: { code: "origin_not_allowed", message: "Bu kaynaktan işlem yapılamaz." } });
     return;
   }
-  let session = sessionFrom(req);
-  if (req.method === "GET" && !session) session = newSession(res);
   try {
-    if (!store.isConfigured()) throw requestError(503, "storage_unavailable", "Anahtar servisi şu anda kullanılamıyor.");
+    if (!keyStore.isConfigured()) throw requestError(503, "storage_unavailable", "Anahtar servisi şu anda kullanılamıyor.");
+    const user = await (authProvider || require("../lib/auth.js")).requireUser(req);
     if (req.method !== "GET") await readBody(req, req.method === "DELETE");
     if (req.method === "POST") {
-      if (!session) session = newSession(res);
-      const created = await store.createKey(session, clientIp(req));
-      sendJson(res, 201, { ...created, limits: store.limits, service: store.serviceInfo });
+      const created = await keyStore.createKey(user.id);
+      sendJson(res, 201, { ...created,
+        limits: { daily_requests: created.key.daily_limit, requests_per_minute: created.key.requests_per_minute },
+        usage: { used_today: created.key.used_today, remaining_today: created.key.remaining_today },
+        service: keyStore.serviceInfo });
     } else if (req.method === "DELETE") {
-      if (session) await store.revokeKey(session);
+      await keyStore.revokeKey(user.id);
       res.statusCode = 204;
       res.end();
     } else {
-      const key = await store.getSession(session);
-      sendJson(res, 200, { key, limits: store.limits, service: store.serviceInfo });
+      const info = await keyStore.getAccountInfo(user.id);
+      sendJson(res, 200, { ...info, service: keyStore.serviceInfo });
     }
   } catch (error) {
-    const status = [400, 409, 413, 415, 429, 503].includes(error.status) ? error.status : 503;
+    const status = [400, 401, 403, 409, 413, 415, 429, 503].includes(error.status) ? error.status : 503;
     if (error.retryAfter) res.setHeader("retry-after", String(error.retryAfter));
     sendJson(res, status, { error: { code: status === 503 ? "storage_unavailable" : error.code,
       message: status === 503 ? "Anahtar servisi şu anda kullanılamıyor." : error.message } });
   }
+};
 }
 
-module.exports = handler;
+module.exports = createHandler();
+module.exports.createHandler = createHandler;
 module.exports.config = { api: { bodyParser: false } };

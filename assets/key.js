@@ -2,7 +2,7 @@
   "use strict";
 
   const byId = (id) => document.getElementById(id);
-  const state = { key: null, secret: null, revealed: false, busy: false, daily: 50, minute: 5, model: "gpt-6.1-sol", loaded: false };
+  const state = { user: null, users: [], key: null, secret: null, revealed: false, busy: false, daily: 50, minute: 5, model: "gpt-6.1-sol", loaded: false, userMode: "create" };
   let toastTimeout;
 
   const formattedNumber = (number) => new Intl.NumberFormat("tr-TR").format(number);
@@ -90,8 +90,8 @@
     state.minute = safeNumber(data.limits?.requests_per_minute, 5);
     state.model = typeof data.service?.model === "string" ? data.service.model : "gpt-6.1-sol";
     state.loaded = true;
-    const usage = state.key ? safeNumber(state.key.used_today, 0) : 0;
-    const remaining = state.key ? safeNumber(state.key.remaining_today, Math.max(0, state.daily - usage)) : state.daily;
+    const usage = safeNumber(state.key?.used_today ?? data.usage?.used_today, 0);
+    const remaining = safeNumber(state.key?.remaining_today ?? data.usage?.remaining_today, Math.max(0, state.daily - usage));
 
     byId("daily-limit").textContent = formattedNumber(state.daily);
     byId("empty-daily-limit").textContent = formattedNumber(state.daily);
@@ -100,9 +100,8 @@
     byId("model-name").textContent = state.model;
     byId("model-id").value = state.model;
     byId("remaining-label").textContent = `${formattedNumber(remaining)} istek kaldı · Her gün yenilenir`;
-    byId("usage-fill").style.width = `${state.daily ? Math.min(100, (usage / state.daily) * 100) : 0}%`;
-    byId("usage-progress").setAttribute("aria-valuemax", String(state.daily));
-    byId("usage-progress").setAttribute("aria-valuenow", String(usage));
+    byId("usage-progress").max = state.daily || 1;
+    byId("usage-progress").value = usage;
     byId("key-loading").hidden = true;
     byId("key-error").hidden = true;
     byId("key-empty").hidden = Boolean(state.key);
@@ -127,13 +126,21 @@
   }
 
   async function request(method) {
-    const response = await fetch("/api/keys", {
+    return api("/api/keys", method, method === "GET" ? undefined : {});
+  }
+
+  async function api(url, method = "GET", payload) {
+    const response = await fetch(url, {
       method,
       credentials: "same-origin",
       cache: "no-store",
       headers: method === "GET" ? { Accept: "application/json" } : { Accept: "application/json", "Content-Type": "application/json" },
-      ...(method === "GET" ? {} : { body: "{}" }),
+      ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
     });
+    if (response.status === 401 && url !== "/api/auth") {
+      window.location.replace("/login");
+      throw Object.assign(new Error("Oturumun sona erdi. Yeniden giriş yap."), { status: 401 });
+    }
     if (response.status === 204) return null;
     let body;
     try { body = await response.json(); } catch { throw new Error("Sunucudan geçerli bir yanıt alınamadı. Biraz sonra yeniden dene."); }
@@ -232,6 +239,195 @@
     }
   }
 
+  function showFormMessage(id, message) {
+    byId(id).textContent = message;
+    byId(id).hidden = false;
+  }
+
+  function selectView(view) {
+    const users = view === "users" && state.user?.role === "admin";
+    byId("overview-view").hidden = users;
+    byId("users-view").hidden = !users;
+    byId("baslarken").hidden = users;
+    byId("nav-overview").classList.toggle("current", !users);
+    byId("nav-users").classList.toggle("current", users);
+    byId("breadcrumb-page").textContent = users ? "Kullanıcılar" : "Genel bakış";
+    if (users) loadUsers();
+  }
+
+  async function authenticate() {
+    byId("retry-auth").hidden = true;
+    try {
+      const data = await api("/api/auth");
+      if (!data.user) { window.location.replace("/login"); return; }
+      state.user = data.user;
+      for (const id of ["sidebar-user", "account-name"]) byId(id).textContent = data.user.username;
+      for (const id of ["sidebar-avatar", "account-avatar"]) byId(id).textContent = data.user.username.slice(0, 1).toUpperCase();
+      byId("sidebar-role").textContent = data.user.role === "admin" ? "Yönetici" : "Kullanıcı";
+      byId("nav-users").hidden = data.user.role !== "admin";
+      byId("auth-cover").hidden = true;
+      document.body.classList.remove("auth-pending");
+      fetch("/api", { cache: "no-store" }).then((response) => response.ok ? response.json() : null)
+        .then((service) => { if (service) renderService(service); }).catch(() => {});
+      refresh();
+    } catch (error) {
+      if (error.status === 401) { window.location.replace("/login"); return; }
+      byId("auth-status").textContent = "Oturum bilgisi alınamadı. Yeniden deneyebilirsin.";
+      byId("retry-auth").hidden = false;
+    }
+  }
+
+  function element(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  function actionButton(label, action, disabled = false) {
+    const button = element("button", "button subtle", label);
+    button.type = "button";
+    button.disabled = disabled;
+    button.addEventListener("click", action);
+    return button;
+  }
+
+  function renderUsers() {
+    byId("users-count").textContent = formattedNumber(state.users.length);
+    const list = byId("user-list");
+    list.replaceChildren();
+    if (!state.users.length) { list.append(element("p", "users-empty", "Henüz kullanıcı bulunmuyor.")); return; }
+    for (const user of state.users) {
+      const row = element("article", "user-row");
+      const identity = element("div", "user-identity");
+      identity.append(element("span", "user-avatar", user.username.slice(0, 1).toUpperCase()));
+      const info = element("div");
+      const name = element("strong", "user-name", user.username);
+      if (user.role === "admin") name.append(element("span", "user-role", "YÖNETİCİ"));
+      info.append(name, element("span", "user-created", dateLabel(user.created_at) || "Hesap oluşturuldu"));
+      identity.append(info);
+      const limits = element("div", "user-limits");
+      limits.append(element("span", "", `${formattedNumber(user.daily_limit)} istek / gün`), element("span", "", `${formattedNumber(user.requests_per_minute)} istek / dakika`));
+      const status = element("span", `user-state${user.enabled ? "" : " disabled"}`);
+      status.append(element("span"), document.createTextNode(user.enabled ? "Aktif" : "Kapalı"));
+      const own = user.username.toLowerCase() === state.user.username.toLowerCase();
+      const actions = element("div", "user-actions");
+      actions.append(actionButton("Kotalar", () => openUserDialog("quota", user)),
+        actionButton("Şifre sıfırla", () => openUserDialog("password", user), own),
+        actionButton(user.enabled ? "Erişimi kapat" : "Erişimi aç", () => toggleUser(user), user.role === "admin" || own));
+      row.append(identity, limits, status, actions);
+      list.append(row);
+    }
+  }
+
+  async function loadUsers() {
+    if (state.user?.role !== "admin") return;
+    byId("users-message").hidden = true;
+    byId("users-loading").hidden = false;
+    byId("refresh-users").disabled = true;
+    try {
+      const data = await api("/api/users");
+      state.users = Array.isArray(data.users) ? data.users : [];
+      renderUsers();
+    } catch (error) { showFormMessage("users-message", error.message); }
+    finally { byId("users-loading").hidden = true; byId("refresh-users").disabled = false; }
+  }
+
+  function openUserDialog(mode, user) {
+    state.userMode = mode;
+    byId("user-form").reset();
+    byId("user-form-message").hidden = true;
+    byId("user-username").value = user?.username || "";
+    byId("user-username").readOnly = mode !== "create";
+    byId("user-password-group").hidden = mode === "quota";
+    byId("user-password").required = mode !== "quota";
+    byId("user-password").disabled = mode === "quota";
+    byId("user-quota-group").hidden = mode === "password";
+    for (const id of ["user-daily", "user-minute"]) byId(id).disabled = mode === "password";
+    byId("user-daily").value = user?.daily_limit ?? 50;
+    byId("user-minute").value = user?.requests_per_minute ?? 5;
+    byId("user-dialog-title").textContent = mode === "create" ? "Kullanıcı ekle" : mode === "quota" ? "Kullanım kotaları" : "Şifreyi sıfırla";
+    byId("user-dialog-description").textContent = mode === "create" ? "Yeni kullanıcıya bir kullanıcı adı ve şifre belirle." : mode === "quota" ? "Bu hesaba ait anahtarların kullanım sınırlarını güncelle." : "Kullanıcının eski şifresi geçersiz olacak. Yeni şifreyi güvenli bir kanaldan ilet.";
+    byId("save-user").textContent = mode === "create" ? "Kullanıcı oluştur" : "Değişiklikleri kaydet";
+    byId("user-dialog").showModal();
+    if (mode === "password") byId("user-password").focus();
+  }
+
+  async function saveUser(event) {
+    event.preventDefault();
+    const form = byId("user-form");
+    if (!form.reportValidity()) return;
+    const mode = state.userMode;
+    const payload = { username: byId("user-username").value.trim() };
+    if (mode !== "quota") payload.password = byId("user-password").value;
+    if (mode !== "password") {
+      payload.daily_limit = Number(byId("user-daily").value);
+      payload.requests_per_minute = Number(byId("user-minute").value);
+    }
+    byId("save-user").disabled = true;
+    byId("user-form-message").hidden = true;
+    form.setAttribute("aria-busy", "true");
+    try {
+      await api("/api/users", mode === "create" ? "POST" : "PATCH", payload);
+      byId("user-dialog").close();
+      byId("user-password").value = "";
+      toast(mode === "create" ? "Kullanıcı oluşturuldu" : "Değişiklikler kaydedildi");
+      await loadUsers();
+      if (payload.username.toLowerCase() === state.user.username.toLowerCase()) refresh();
+    } catch (error) { showFormMessage("user-form-message", error.message); }
+    finally { form.setAttribute("aria-busy", "false"); byId("save-user").disabled = false; }
+  }
+
+  async function toggleUser(user) {
+    if (user.role === "admin" || user.username.toLowerCase() === state.user.username.toLowerCase()) return;
+    if (user.enabled && !window.confirm(`${user.username} hesabının erişimi kapatılacak. Kullanıcı giriş yapamayacak ve API anahtarını kullanamayacak. Devam edilsin mi?`)) return;
+    try {
+      await api("/api/users", "PATCH", { username: user.username, enabled: !user.enabled });
+      toast(user.enabled ? "Kullanıcı erişimi kapatıldı" : "Kullanıcı erişimi açıldı");
+      await loadUsers();
+    } catch (error) { showFormMessage("users-message", error.message); }
+  }
+
+  async function changePassword(event) {
+    event.preventDefault();
+    const form = byId("password-form");
+    if (!form.reportValidity()) return;
+    byId("password-form-message").hidden = true;
+    if (byId("new-password").value !== byId("confirm-password").value) {
+      showFormMessage("password-form-message", "Yeni şifreler eşleşmiyor."); return;
+    }
+    byId("save-password").disabled = true;
+    try {
+      await api("/api/auth", "POST", { action: "password", current_password: byId("current-password").value, new_password: byId("new-password").value });
+      byId("password-dialog").close();
+      form.reset();
+      toast("Şifren güncellendi");
+    } catch (error) { showFormMessage("password-form-message", error.message); }
+    finally { byId("save-password").disabled = false; }
+  }
+
+  async function logout() {
+    byId("logout").disabled = true;
+    try {
+      await api("/api/auth", "POST", { action: "logout" });
+      state.secret = null;
+      window.location.replace("/login");
+    } catch (error) { announce(error.message); byId("logout").disabled = false; }
+  }
+
+  byId("nav-overview").addEventListener("click", () => selectView("overview"));
+  byId("nav-users").addEventListener("click", () => selectView("users"));
+  byId("nav-start").addEventListener("click", () => selectView("overview"));
+  byId("refresh-users").addEventListener("click", loadUsers);
+  byId("add-user").addEventListener("click", () => openUserDialog("create"));
+  byId("user-form").addEventListener("submit", saveUser);
+  byId("password-form").addEventListener("submit", changePassword);
+  byId("change-password").addEventListener("click", () => { byId("password-form").reset(); byId("password-form-message").hidden = true; byId("password-dialog").showModal(); });
+  byId("logout").addEventListener("click", logout);
+  byId("retry-auth").addEventListener("click", authenticate);
+  document.querySelectorAll("[data-close-dialog]").forEach((button) => button.addEventListener("click", () => byId(button.dataset.closeDialog).close()));
+  for (const id of ["user-dialog", "password-dialog"]) byId(id).addEventListener("close", () => byId(id).querySelectorAll('input[type="password"]').forEach((input) => { input.value = ""; }));
+
   byId("create-key").addEventListener("click", createKey);
   byId("retry-keys").addEventListener("click", refresh);
   byId("rotate-key").addEventListener("click", () => revokeKey(true));
@@ -247,7 +443,5 @@
     else updateExample();
   });
   setBusy(false);
-  fetch("/api", { cache: "no-store" }).then((response) => response.ok ? response.json() : null)
-    .then((service) => { if (service) renderService(service); }).catch(() => {});
-  refresh();
+  authenticate();
 })();

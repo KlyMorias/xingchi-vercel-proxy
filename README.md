@@ -1,47 +1,52 @@
 # KlyAPI
 
-Vercel üzerinde çalışan kişisel API anahtarı paneli ve Xingchi API geçidi.
+Vercel'de çalışan, yalnızca yöneticinin eklediği hesaplara açık API paneli.
 
-- `/key`: tarayıcıya bağlı anonim oturumla anahtar oluşturma, tek seferlik gösterme, kullanım görüntüleme, yenileme ve iptal.
-- `/`: aynı anahtar paneli.
-- `/api`: JSON hizmet bilgisi.
-- `/api/v1`: OpenAI uyumlu istemciler için Base URL. `/api/responses` gibi kısa yollar ve önceki `/v1` yolları da desteklenir.
-- Model: `gpt-6.1-sol`.
+## Kullanım
 
-Kişisel anahtarlar 30 gün geçerlidir. Her anonim oturumda bir aktif anahtar bulunur. Günlük üretim kotası 50, dakikalık çağrı sınırı 5'tir. Anahtar yenilemek oturumun kullanım sayaçlarını sıfırlamaz. Hatalı upstream yanıtları günlük kotadan iade edilir; hız sınırı korunur. Model listesi günlük üretim kotasını tüketmez. Sayaçlar UTC gün sınırında yenilenir.
+- `/login`: kullanıcı adı ve parola ile giriş. Herkese açık kayıt yoktur.
+- `/key`: kişisel API anahtarı oluşturma, kopyalama, yenileme ve iptal.
+- Panelde **Kullanıcılar**: yönetici kullanıcı ekler, hesabı kapatır, parola sıfırlar ve kota ayarlar.
+- Panelde **Şifre değiştir**: mevcut kullanıcı kendi parolasını değiştirir.
+- OpenAI Base URL: `https://klyapi.vercel.app/api/v1`
+- Anthropic Base URL: `https://klyapi.vercel.app/api`
+- Model: `gpt-6.1-sol`
 
-## Kalıcı veri ve kurulum
+Bir hesapta bir aktif API anahtarı bulunur; anahtar 30 gün geçerlidir ve tam değeri yalnızca oluşturma yanıtında gösterilir. Varsayılan kota günlük 50 üretim isteği ve dakikada 5 çağrıdır. Yönetici bunları kullanıcı bazında değiştirebilir. Yenileme günlük kullanımı sıfırlamaz. Model listesi günlük üretim kotasını tüketmez; başarısız upstream çağrılarında günlük kota iade edilir. Günlük sayaç UTC 00:00'da yenilenir. Kapatılmış kullanıcıların oturumları ve API anahtarları erişemez. Eski ortak sahip tokenı artık kabul edilmez.
 
-Kişisel anahtarlar ve sayaçlar Upstash Redis'te tutulur. API anahtarlarının tamamı ve IP adresleri veritabanına yazılmaz; yalnızca hash'ler, kısa anahtar ön eki, oluşturma/son kullanım tarihleri ve sayaçlar saklanır. Aynı IP'den günlük en fazla üç anahtar oluşturulabilir. Bu, hesap doğrulaması içermeyen anonim bir başlangıç sistemidir; tarayıcı verileri silinirse yönetim oturumu kaybolur.
+## Kalıcı depolama ve güvenlik
 
-Tüm doğrulama, iptal ve kota kararları Redis'te tek atomik Lua işlemiyle yapılır. Veritabanına ulaşılamadığında kişisel anahtar erişimi kapalı kalır. Ücretsiz plan ve tek birincil bölge kullanılır; otomatik ücretli plan yükseltmesi kapalı olmalıdır.
+Hesaplar, parola hash'leri, oturum hash'leri, API anahtarı hash'leri ve kotalar özel Vercel Blob deposunda saklanır. Tam parolalar veya tam API anahtarları kalıcı depoya yazılmaz. Okumalar `useCache:false` ile en son sürümü getirir; güncellemeler ETag `ifMatch` ile karşılaştırılıp yazılır. Eşzamanlı değişiklik çakışmaları yeniden denenir; depolama arızasında erişim kapalı kalır.
 
-Vercel ortam değişkenleri:
+Bu depo, küçük ve davetli kullanıcı grupları için tek JSON kaydı kullanır. Kullanıcı üst sınırı, giriş denemesi sınırı, oturum ömrü ve kayıt boyutu kodda sınırlandırılmıştır. Daha yüksek trafik için aynı arayüz ilişkisel veritabanına taşınabilir.
 
-| Değişken | Amaç |
-| --- | --- |
-| `XINGCHI_API_KEY` | Upstream anahtarı, yalnızca sunucuda Secret olarak |
-| `KEY_HASH_SECRET` | Oturum ve IP hash'leri için en az 32 karakterlik ayrı sır |
-| `KV_REST_API_URL`, `KV_REST_API_TOKEN` | Vercel Upstash bağlantısının Redis REST bilgileri |
-| `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | Yukarıdaki Redis değişkenlerine alternatif |
-| `PROXY_ACCESS_TOKEN` | Önceki sahip erişim anahtarı; kişisel kota dışında sahibin özel erişimi |
-| `UPSTREAM_AUTH_MODE` | `authorization` (varsayılan) veya `x-api-key` |
-| `MAX_OUTPUT_TOKENS` | Çağrı başına çıktı sınırı, varsayılan 2048, en çok 8192 |
+Parolalar Node.js scrypt ile ayrı rastgele salt kullanılarak hash'lenir. Oturum çerezi Secure, HttpOnly ve SameSite=Strict'tir. Parola değişiminde eski oturumlar geçersiz olur. Yönetici işlemleri her istekte sunucuda yetki kontrolünden geçer; arayüzde düğme gizlemek tek başına yetkilendirme değildir. Kullanıcı bilgilerini değiştiren isteklere origin ve JSON boyut kontrolü uygulanır.
 
-Vercel CLI ile ücretsiz Redis oluşturma:
+## Vercel kurulumu
+
+Özel Blob deposunu projeye OIDC ile bağla:
 
 ```sh
-vercel integration add upstash/upstash-kv --name klyapi-keys --billing-plan free --meta primaryRegion=fra1 --meta eviction=false --meta prodPack=false --meta autoUpgrade=false --environment production --no-env-pull
+vercel storage create klyapi-private --type blob --access private --region iad1
+vercel storage connect klyapi-private --yes
 ```
 
-İlk kurulumda Vercel, Upstash sözleşmesinin hesap sahibi tarafından kabulünü ister. Bu adım tamamlanmadan kişisel anahtar oluşturma çalışmaz. Kaynak kodu ve sır içermeyen panel yayımlanabilir. Ortam değişkenlerinden sonra `vercel deploy --prod --yes` ile yeniden dağıt.
+| Ortam değişkeni | Amaç |
+| --- | --- |
+| `BLOB_STORE_ID` | Bağlı özel Vercel Blob deposu; OIDC kimliğiyle erişim |
+| `XINGCHI_API_KEY` | Yalnızca sunucuda kullanılan upstream API anahtarı |
+| `KEY_HASH_SECRET` | Giriş denemesi anahtarlarını hash'lemek için ayrı rastgele sır |
+| `ADMIN_USERNAME` | İlk yönetici kullanıcı adı, yalnızca ilk veri oluşturulurken |
+| `ADMIN_PASSWORD_HASH` | İlk yöneticinin scrypt parola hash'i; düz parola değildir |
+| `MAX_OUTPUT_TOKENS` | İstek başına çıktı tavanı, varsayılan 2048, en çok 8192 |
+| `UPSTREAM_AUTH_MODE` | `authorization` (varsayılan) veya `x-api-key` |
+
+Başlangıç yönetici bilgileri kaynak kodunda bulunmaz. İlk veri oluşturulduktan sonra panelden yapılan parola değişiklikleri ortam değişkeniyle geri alınmaz. Sırlar `.gitignore` ve `.vercelignore` ile kaynak dağıtımından dışlanır.
 
 ## İstemci uyumluluğu
 
-Upstream yalnızca kodlama istemcisi biçimindeki Responses API çağrılarını kabul ediyor. Geçit upstream'e Codex uyumlu Responses gövdesi ve istemci başlıkları gönderir; `User-Agent` içinde KlyAPI uyumluluk geçidi olduğu da belirtilir. Chat Completions ve Anthropic Messages gövdeleri Responses'a, sonuçlar çağıran uygulamanın beklediği biçime dönüştürülür. Upstream her zaman akışlı çağrılır; JSON isteyen istemciler için tamamlanmış yanıt birleştirilir. Akışlı isteyenler için olaylar ilgili protokole dönüştürülür.
+Upstream'e Responses API biçiminde akışlı istek gönderilir; Chat Completions ve Anthropic Messages istek/yanıtları dönüştürülür. JSON isteyen istemcilerde tamamlanan yanıt birleştirilir; streaming isteyenler için olaylar ilgili protokole çevrilir. Kodlama istemcisi uyumlu başlıklarda KlyAPI geçidi belirtilir. Metin, görsel girdiler ve işlev araçları desteklenir. Ses, belge blokları veya dönüştürülemeyen seçenekler 400 hatası verir. Kesilen upstream akışları başarılıymış gibi gösterilmez.
 
-Metin, görsel girdiler, işlev araçları ve araç sonuçları desteklenir. Ses, belge blokları, bir çağrıda birden fazla çıktı ve dönüştürülemeyen seçenekler açıklayıcı bir 400 hatası verir. Kesilen upstream akışları başarılı yanıt gibi gösterilmez. Bu, tüm uygulama ve model özelliklerinin birebir desteklendiği anlamına gelmez.
+## Doğrulama
 
-## Kontrol
-
-Node.js 20 veya üzerinde `npm test`. Testler protokol dönüşümü, araç akışları, UTF-8/SSE parçaları, kimlik doğrulama, JSON boyut sınırı, upstream hataları, Redis arızasında erişimin kapanması, tek seferlik anahtar gösterimi, origin kontrolü, kota rezervasyonu ve hata iadesini kapsar. Gerçek Redis bağlantısıyla eşzamanlı kota ve iptal akışı da dağıtım sonrasında doğrulanmalıdır.
+Node.js 20+ ile `npm test`. Testler yetkilendirme, parolalar, kullanıcı yönetimi, kişisel anahtarlar, eşzamanlı sayaçlar, ETag yeniden deneme, protokol dönüşümleri, SSE ve upstream hatalarını kapsar. Canlıya alırken giriş → anahtar oluşturma → gerçek model çağrısı → iptal akışı ayrıca doğrulanmalıdır.

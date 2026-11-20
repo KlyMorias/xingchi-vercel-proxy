@@ -2,7 +2,10 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 
-const handler = require("../api/proxy.js");
+const proxyModule = require("../api/proxy.js");
+const handler = proxyModule.createHandler({ isConfigured: () => true,
+  reserve: async () => ({ ok: true, reservation: null }), release: async () => {} });
+handler.createHandler = proxyModule.createHandler;
 
 function makeRequest({ method = "POST", path = ["v1", "responses"], headers = {}, body = '{"input":"hello"}' } = {}) {
   return {
@@ -71,7 +74,7 @@ test.afterEach(() => {
 });
 
 test("rejects unauthorized callers without contacting Xingchi", async () => {
-  process.env.PROXY_ACCESS_TOKEN = "a".repeat(40);
+  process.env.PROXY_ACCESS_TOKEN = "kly_" + "a".repeat(43);
   process.env.XINGCHI_API_KEY = "upstream-secret";
   let calls = 0;
   global.fetch = async () => { calls++; throw new Error("must not be called"); };
@@ -84,7 +87,7 @@ test("rejects unauthorized callers without contacting Xingchi", async () => {
 });
 
 test("uses server-side credentials and the Responses upstream for a normal JSON client", async () => {
-  process.env.PROXY_ACCESS_TOKEN = "p".repeat(40);
+  process.env.PROXY_ACCESS_TOKEN = "kly_" + "p".repeat(43);
   process.env.XINGCHI_API_KEY = "upstream-secret";
   process.env.UPSTREAM_AUTH_MODE = "x-api-key";
   let observed;
@@ -122,7 +125,7 @@ test("uses server-side credentials and the Responses upstream for a normal JSON 
 });
 
 test("rejects unlisted paths instead of proxying arbitrary routes", async () => {
-  process.env.PROXY_ACCESS_TOKEN = "a".repeat(40);
+  process.env.PROXY_ACCESS_TOKEN = "kly_" + "a".repeat(43);
   let calls = 0;
   global.fetch = async () => { calls++; };
 
@@ -136,7 +139,7 @@ test("rejects unlisted paths instead of proxying arbitrary routes", async () => 
 });
 
 test("rejects request bodies above the fixed size limit", async () => {
-  process.env.PROXY_ACCESS_TOKEN = "a".repeat(40);
+  process.env.PROXY_ACCESS_TOKEN = "kly_" + "a".repeat(43);
   process.env.XINGCHI_API_KEY = "upstream-secret";
   let calls = 0;
   global.fetch = async () => { calls++; };
@@ -153,7 +156,7 @@ test("rejects request bodies above the fixed size limit", async () => {
 });
 
 test("rejects output limits above the configured ceiling", async () => {
-  process.env.PROXY_ACCESS_TOKEN = "a".repeat(40);
+  process.env.PROXY_ACCESS_TOKEN = "kly_" + "a".repeat(43);
   process.env.XINGCHI_API_KEY = "upstream-secret";
   let calls = 0;
   global.fetch = async () => { calls++; };
@@ -169,7 +172,7 @@ test("rejects output limits above the configured ceiling", async () => {
 });
 
 test("translates Chat Completions and its legacy token limit into Responses and back", async () => {
-  process.env.PROXY_ACCESS_TOKEN = "p".repeat(40);
+  process.env.PROXY_ACCESS_TOKEN = "kly_" + "p".repeat(43);
   process.env.XINGCHI_API_KEY = "upstream-secret";
   let forwardedBody;
   global.fetch = async (_url, options) => {
@@ -198,7 +201,7 @@ test("translates Chat Completions and its legacy token limit into Responses and 
 });
 
 test("accepts a slash-separated query path produced by Vercel rewrites", async () => {
-  process.env.PROXY_ACCESS_TOKEN = "p".repeat(40);
+  process.env.PROXY_ACCESS_TOKEN = "kly_" + "p".repeat(43);
   process.env.XINGCHI_API_KEY = "upstream-secret";
   let requestedUrl;
   global.fetch = async (url) => {
@@ -219,7 +222,7 @@ test("accepts a slash-separated query path produced by Vercel rewrites", async (
 });
 
 test("forwards Responses events before the upstream generation finishes", async () => {
-  process.env.PROXY_ACCESS_TOKEN = "p".repeat(40);
+  process.env.PROXY_ACCESS_TOKEN = "kly_" + "p".repeat(43);
   process.env.XINGCHI_API_KEY = "upstream-secret";
   const created = { type: "response.created", response: { ...responseFixture(), status: "in_progress", output: [] } };
   const delta = { type: "response.output_text.delta", item_id: "msg_test", output_index: 0,
@@ -281,7 +284,7 @@ test("forwards Responses events before the upstream generation finishes", async 
 });
 
 test("preserves the upstream JSON error status, body and retry header", async () => {
-  process.env.PROXY_ACCESS_TOKEN = "p".repeat(40);
+  process.env.PROXY_ACCESS_TOKEN = "kly_" + "p".repeat(43);
   process.env.XINGCHI_API_KEY = "upstream-secret";
   const upstreamError = '{"error":{"type":"rate_limit_error","message":"Quota exceeded"}}';
   global.fetch = async () => new Response(upstreamError, {
@@ -403,7 +406,7 @@ test("fails closed if the quota database is unavailable", async () => {
 });
 
 test("translates Anthropic messages into Responses and returns an Anthropic message", async () => {
-  process.env.PROXY_ACCESS_TOKEN = "p".repeat(40);
+  process.env.PROXY_ACCESS_TOKEN = "kly_" + "p".repeat(43);
   process.env.XINGCHI_API_KEY = "upstream-secret";
   let observed;
   global.fetch = async (url, options) => {
@@ -434,7 +437,7 @@ test("translates Anthropic messages into Responses and returns an Anthropic mess
 });
 
 test("collects an upstream Responses stream for a client that requested plain JSON", async () => {
-  process.env.PROXY_ACCESS_TOKEN = "p".repeat(40);
+  process.env.PROXY_ACCESS_TOKEN = "kly_" + "p".repeat(43);
   process.env.XINGCHI_API_KEY = "upstream-secret";
   const frames = [
     eventFrame({ type: "response.created", response: { ...responseFixture(), status: "in_progress", output: [] } }),
@@ -456,7 +459,7 @@ test("collects an upstream Responses stream for a client that requested plain JS
 });
 
 test("reports a truncated generation stream instead of manufacturing completion", async () => {
-  process.env.PROXY_ACCESS_TOKEN = "p".repeat(40);
+  process.env.PROXY_ACCESS_TOKEN = "kly_" + "p".repeat(43);
   process.env.XINGCHI_API_KEY = "upstream-secret";
   global.fetch = async () => new Response(eventFrame({ type: "response.created", response: {
     ...responseFixture(), status: "in_progress", output: [],
@@ -472,7 +475,7 @@ test("reports a truncated generation stream instead of manufacturing completion"
 });
 
 test("rejects unavailable models and multiple outputs without an upstream request", async () => {
-  process.env.PROXY_ACCESS_TOKEN = "p".repeat(40);
+  process.env.PROXY_ACCESS_TOKEN = "kly_" + "p".repeat(43);
   process.env.XINGCHI_API_KEY = "upstream-secret";
   let calls = 0;
   global.fetch = async () => { calls++; throw new Error("must not be called"); };

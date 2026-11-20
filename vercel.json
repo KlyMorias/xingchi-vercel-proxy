@@ -2,6 +2,7 @@
   "rewrites": [
     { "source": "/", "destination": "/key.html" },
     { "source": "/key", "destination": "/key.html" },
+    { "source": "/login", "destination": "/login.html" },
     { "source": "/api", "destination": "/api/status" },
     { "source": "/api/", "destination": "/api/status" },
     { "source": "/api/models", "destination": "/api/proxy?path=v1/models" },

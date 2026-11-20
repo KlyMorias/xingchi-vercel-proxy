@@ -1,4 +1,3 @@
-const crypto = require("node:crypto");
 const keyStore = require("../lib/key-store");
 const { chatRequestToResponses, chatCompletionFromResponse, createChatStream } = require("../lib/openai-compat");
 const { messagesRequestToResponses, messageFromResponse, createMessagesStream } = require("../lib/anthropic-compat");
@@ -18,13 +17,6 @@ function sendJson(res, status, message) {
   res.setHeader("content-type", "application/json; charset=utf-8");
   res.setHeader("cache-control", "no-store");
   res.end(JSON.stringify({ error: message }));
-}
-
-function isEqualSecret(provided, expected) {
-  if (typeof provided !== "string" || typeof expected !== "string") return false;
-  const left = Buffer.from(provided);
-  const right = Buffer.from(expected);
-  return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
 function requestCredentials(req) {
@@ -185,16 +177,13 @@ return async function handler(req, res) {
     return;
   }
 
-  const expectedProxyToken = process.env.PROXY_ACCESS_TOKEN;
   const credentials = requestCredentials(req);
-  const isOwner = expectedProxyToken?.length >= 32
-    && credentials.some((value) => isEqualSecret(value, expectedProxyToken));
   const personalToken = credentials.find((value) => /^kly_[A-Za-z0-9_-]{43}$/.test(value));
-  if (!isOwner && !personalToken) {
+  if (!personalToken) {
     sendJson(res, 401, "Unauthorized");
     return;
   }
-  if (!isOwner && !store.isConfigured()) {
+  if (!store.isConfigured()) {
     sendJson(res, 503, "Key service is not configured");
     return;
   }
@@ -253,7 +242,7 @@ return async function handler(req, res) {
   }
 
   let reservation;
-  if (!isOwner) {
+  {
     try {
       const ip = String(req.headers["x-vercel-forwarded-for"] || req.socket?.remoteAddress || "unknown").split(",")[0].trim();
       const access = await store.reserve(personalToken, { ip, consumeDaily: req.method === "POST" });
