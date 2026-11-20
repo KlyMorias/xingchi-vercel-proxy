@@ -24,16 +24,18 @@ Parolalar Node.js scrypt ile ayrı rastgele salt kullanılarak hash'lenir. Oturu
 
 ## Vercel kurulumu
 
-Özel Blob deposunu projeye OIDC ile bağla:
+Özel Blob deposunu projeye bağla:
 
 ```sh
 vercel storage create klyapi-private --type blob --access private --region iad1
 vercel storage connect klyapi-private --yes
+vercel storage update klyapi-private --auth token --add-rw-token --environment production --yes
 ```
 
 | Ortam değişkeni | Amaç |
 | --- | --- |
-| `BLOB_STORE_ID` | Bağlı özel Vercel Blob deposu; OIDC kimliğiyle erişim |
+| `BLOB_STORE_ID` | Bağlı özel Vercel Blob deposu |
+| `BLOB_READ_WRITE_TOKEN` | Özel depoya yalnızca sunucudan erişim; tanımlıysa doğrudan bu kimlik kullanılır, aksi halde OIDC |
 | `XINGCHI_API_KEY` | Yalnızca sunucuda kullanılan upstream API anahtarı |
 | `KEY_HASH_SECRET` | Giriş denemesi anahtarlarını hash'lemek için ayrı rastgele sır |
 | `ADMIN_USERNAME` | İlk yönetici kullanıcı adı, yalnızca ilk veri oluşturulurken |
