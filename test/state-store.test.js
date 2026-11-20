@@ -37,7 +37,10 @@ test("initializes private account storage once with only a password hash", async
   assert.equal(first.users.testadmin.id, second.users.testadmin.id);
   for (const call of client.calls) {
     assert.equal(call.options.access, "private");
-    if (call.operation === "get") assert.equal(call.options.useCache, false);
+    if (call.operation === "get") {
+      assert.equal(call.options.useCache, false);
+      assert.equal(call.options.headers["accept-encoding"], "identity");
+    }
   }
 });
 
