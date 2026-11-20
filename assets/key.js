@@ -455,7 +455,7 @@
 
   byId("nav-overview").addEventListener("click", () => selectView("overview"));
   byId("nav-users").addEventListener("click", () => selectView("users"));
-  byId("nav-start").addEventListener("click", () => selectView("overview"));
+  document.querySelectorAll('a[href="#codex-setup"]').forEach((link) => link.addEventListener("click", () => selectView("overview")));
   byId("refresh-users").addEventListener("click", loadUsers);
   byId("add-user").addEventListener("click", () => openUserDialog("create"));
   byId("user-form").addEventListener("submit", saveUser);
