@@ -157,6 +157,10 @@ async function writeUpstreamResponse(upstream, res) {
 }
 
 async function handler(req, res) {
+  res.setHeader("access-control-allow-origin", "*");
+  res.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
+  res.setHeader("access-control-allow-headers", "authorization, content-type, x-api-key, x-proxy-key, anthropic-version, anthropic-beta, openai-beta, anthropic-dangerous-direct-browser-access");
+  res.setHeader("access-control-expose-headers", "retry-after, x-request-id");
   if (req.method === "OPTIONS") {
     res.statusCode = 204;
     res.setHeader("allow", "GET, POST, OPTIONS");
@@ -165,7 +169,8 @@ async function handler(req, res) {
   }
 
   const pathParts = req.query?.path;
-  const path = Array.isArray(pathParts) ? pathParts.join("/") : "";
+  const path = Array.isArray(pathParts) ? pathParts.join("/")
+    : typeof pathParts === "string" ? pathParts : "";
   const route = `${req.method} ${path}`;
   if (!ALLOWED_ROUTES.has(route)) {
     res.setHeader("allow", "GET, POST, OPTIONS");

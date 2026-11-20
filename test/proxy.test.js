@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 
-const handler = require("../api/[...path].js");
+const handler = require("../api/proxy.js");
 
 function makeRequest({ method = "POST", path = ["v1", "messages"], headers = {}, body = "{}" } = {}) {
   return {
@@ -23,6 +23,7 @@ function makeResponse() {
     headers: {},
     headersSent: false,
     body: "",
+    writtenChunks: chunks,
     setHeader(name, value) { this.headers[name.toLowerCase()] = value; },
     write(chunk) {
       this.headersSent = true;
@@ -153,4 +154,129 @@ test("preserves legacy OpenAI max_tokens without adding another limit field", as
   }, body: '{"model":"example","messages":[],"max_tokens":300}' }), res);
 
   assert.equal(forwardedBody, '{"model":"example","messages":[],"max_tokens":300}');
+});
+
+test("accepts a slash-separated query path produced by Vercel rewrites", async () => {
+  process.env.PROXY_ACCESS_TOKEN = "p".repeat(40);
+  process.env.XINGCHI_API_KEY = "upstream-secret";
+  let requestedUrl;
+  global.fetch = async (url) => {
+    requestedUrl = url;
+    return new Response('{"data":[]}', {
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const res = makeResponse();
+  await handler(makeRequest({ method: "GET", path: "v1/models", headers: {
+    authorization: `Bearer ${process.env.PROXY_ACCESS_TOKEN}`,
+  } }), res);
+
+  assert.equal(requestedUrl, "https://api.xingchiapi.com/v1/models");
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body, '{"data":[]}');
+});
+
+test("forwards event stream chunks before the upstream stream finishes", async () => {
+  process.env.PROXY_ACCESS_TOKEN = "p".repeat(40);
+  process.env.XINGCHI_API_KEY = "upstream-secret";
+  const firstChunk = Buffer.from('data: {"delta":"hello"}\n\n');
+  const lastChunk = Buffer.from("data: [DONE]\n\n");
+  let streamController;
+  const stream = new ReadableStream({
+    start(controller) {
+      streamController = controller;
+      controller.enqueue(firstChunk);
+    },
+  });
+  global.fetch = async () => new Response(stream, {
+    headers: { "content-type": "text/event-stream" },
+  });
+
+  const res = makeResponse();
+  let signalFirstWrite;
+  const firstWrite = new Promise((resolve) => { signalFirstWrite = resolve; });
+  const originalWrite = res.write.bind(res);
+  res.write = (chunk) => {
+    const result = originalWrite(chunk);
+    signalFirstWrite();
+    return result;
+  };
+  const runningHandler = handler(makeRequest({ headers: {
+    authorization: `Bearer ${process.env.PROXY_ACCESS_TOKEN}`,
+    "content-type": "application/json",
+  }, body: '{"model":"example","messages":[],"stream":true}' }), res);
+
+  let writeTimeout;
+  let closed = false;
+  try {
+    await Promise.race([
+      firstWrite,
+      new Promise((_, reject) => {
+        writeTimeout = setTimeout(() => reject(new Error("First stream chunk was buffered")), 1500);
+      }),
+    ]);
+    assert.deepEqual(res.writtenChunks, [firstChunk]);
+    assert.equal(res.ended, undefined);
+    streamController.enqueue(lastChunk);
+    streamController.close();
+    closed = true;
+    await runningHandler;
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.headers["content-type"], "text/event-stream");
+    assert.deepEqual(res.writtenChunks, [firstChunk, lastChunk]);
+    assert.equal(res.body, Buffer.concat([firstChunk, lastChunk]).toString("utf8"));
+    assert.equal(res.ended, true);
+  } finally {
+    clearTimeout(writeTimeout);
+    if (!closed) streamController.close();
+    await runningHandler;
+  }
+});
+
+test("preserves the upstream JSON error status, body and retry header", async () => {
+  process.env.PROXY_ACCESS_TOKEN = "p".repeat(40);
+  process.env.XINGCHI_API_KEY = "upstream-secret";
+  const upstreamError = '{"error":{"type":"rate_limit_error","message":"Quota exceeded"}}';
+  global.fetch = async () => new Response(upstreamError, {
+    status: 429,
+    headers: { "content-type": "application/json", "retry-after": "7" },
+  });
+
+  const res = makeResponse();
+  await handler(makeRequest({ headers: {
+    authorization: `Bearer ${process.env.PROXY_ACCESS_TOKEN}`,
+    "content-type": "application/json",
+  } }), res);
+
+  assert.equal(res.statusCode, 429);
+  assert.equal(res.body, upstreamError);
+  assert.equal(res.headers["content-type"], "application/json");
+  assert.equal(res.headers["retry-after"], "7");
+});
+
+test("answers browser preflight without credentials or an upstream request", async () => {
+  delete process.env.PROXY_ACCESS_TOKEN;
+  delete process.env.XINGCHI_API_KEY;
+  let calls = 0;
+  global.fetch = async () => { calls++; throw new Error("must not be called"); };
+
+  const res = makeResponse();
+  await handler(makeRequest({ method: "OPTIONS", path: "v1/messages", headers: {
+    origin: "https://client.example",
+    "access-control-request-method": "POST",
+    "access-control-request-headers": "authorization,content-type,x-api-key,x-proxy-key",
+  } }), res);
+
+  assert.equal(res.statusCode, 204);
+  assert.equal(res.headers["access-control-allow-origin"], "*");
+  const allowedMethods = res.headers["access-control-allow-methods"].split(/\s*,\s*/);
+  for (const method of ["GET", "POST", "OPTIONS"]) assert.ok(allowedMethods.includes(method));
+  const allowedHeaders = res.headers["access-control-allow-headers"].toLowerCase().split(/\s*,\s*/);
+  for (const name of ["authorization", "content-type", "x-api-key", "x-proxy-key"]) {
+    assert.ok(allowedHeaders.includes(name));
+  }
+  assert.equal(res.body, "");
+  assert.equal(calls, 0);
 });

@@ -20,14 +20,14 @@
   <body>
     <main>
       <h1>Xingchi API Proxy</h1>
-      <p>API köprüsü çalışıyor. İstekler Vercel Function üzerinden Xingchi API’ye yönlendirilir.</p>
+      <p>İstekler Vercel Function üzerinden Xingchi API’ye yönlendirilir. Kullanılabilir modeller ve istemci erişimi Xingchi hesabının izinlerine bağlıdır.</p>
       <div class="card">
         <span class="label">OpenAI uyumlu istemciler · Base URL</span>
-        <code>https://klyapi.vercel.app/api/v1</code>
+        <code>https://klyapi.vercel.app/v1</code>
       </div>
       <div class="card">
         <span class="label">Anthropic uyumlu istemciler · Base URL</span>
-        <code>https://klyapi.vercel.app/api</code>
+        <code>https://klyapi.vercel.app</code>
       </div>
       <p class="note">İstemcide proxy erişim anahtarını API key olarak kullan. Xingchi anahtarını yalnızca Vercel ortam değişkenlerinde sakla; tarayıcı koduna veya bu sayfaya ekleme.</p>
       <p>Desteklenen yollar: <code>/v1/models</code>, <code>/v1/messages</code>, <code>/v1/chat/completions</code> ve <code>/v1/responses</code>.</p>

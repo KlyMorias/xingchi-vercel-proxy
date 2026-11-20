@@ -1,6 +1,6 @@
 # Xingchi API proxy for Vercel
 
-An authenticated reverse proxy for Xingchi's API. It forwards the common Anthropic Messages route and OpenAI-compatible Chat Completions/Responses routes to the fixed origin `https://api.xingchiapi.com`. The Xingchi key stays on the server; callers use a separate proxy token.
+An authenticated reverse proxy for Xingchi's API. It forwards API requests to the fixed origin `https://api.xingchiapi.com`. The Xingchi key stays on the server; callers use a separate proxy token. This proxy preserves upstream errors and permissions. It does not impersonate an approved coding client.
 
 ## Deploy
 
@@ -17,12 +17,18 @@ Never place `XINGCHI_API_KEY` in frontend code or a public GitHub repo. Do not p
 
 ## Client configuration
 
-The Vercel function is mounted under `/api`:
+Client base URLs:
 
-- Anthropic-compatible clients: base URL `https://YOUR-DEPLOYMENT.vercel.app/api`
-- OpenAI-compatible clients: base URL `https://YOUR-DEPLOYMENT.vercel.app/api/v1`
+- Anthropic-compatible clients: base URL `https://YOUR-DEPLOYMENT.vercel.app`
+- OpenAI-compatible clients: base URL `https://YOUR-DEPLOYMENT.vercel.app/v1`
+
+The earlier `/api` and `/api/v1` base URLs are also supported. Explicit rewrites route both prefixes to a single Vercel Node function.
 
 Supported requests: `GET /v1/models`, `POST /v1/messages`, `POST /v1/chat/completions`, `POST /v1/responses`. The proxy forwards streaming responses and the documented protocol headers. Requests without a requested output limit receive the configured default; larger limits are rejected.
+
+## Observed upstream restrictions
+
+On 20 November 2026, an authenticated direct probe returned a model list, but the provider returned `chat_completions_disabled` for Chat Completions and `client_not_allowed` for a standard Responses API request. A hosted relay does not remove this provider restriction. Use only endpoints and client access authorized by your Xingchi account; a successful model-list request does not prove text generation is enabled for general SDK clients.
 
 Configure the client with `PROXY_ACCESS_TOKEN` as its API key. The proxy replaces caller credentials with `XINGCHI_API_KEY` upstream. Your target application must let you set a custom base URL and use the matching request protocol. This cannot turn an API key into a separate product login or make an incompatible protocol work automatically.
 
