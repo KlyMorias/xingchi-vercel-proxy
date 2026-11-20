@@ -6,13 +6,14 @@ Vercel'de çalışan, yalnızca yöneticinin eklediği hesaplara açık API pane
 
 - `/login`: kullanıcı adı ve parola ile giriş. Herkese açık kayıt yoktur.
 - `/key`: kişisel API anahtarı oluşturma, kopyalama, yenileme ve iptal.
-- Panelde **Kullanıcılar**: yönetici kullanıcı ekler, hesabı kapatır, parola sıfırlar ve kota ayarlar.
+- Panelde **Modeller**: aktif model kataloğunu ve desteklenen API yollarını gör.
+- Panelde **Kullanıcılar**: yönetici kullanıcı ekler, hesabı kapatır, parola sıfırlar ve dakika/saat/gün/hafta kotalarını ayarlar.
 - Panelde **Şifre değiştir**: mevcut kullanıcı kendi parolasını değiştirir.
 - OpenAI Base URL: `https://klyapi.vercel.app/api/v1`
 - Anthropic Base URL: `https://klyapi.vercel.app/api`
 - Model: `gpt-6.1-sol`
 
-Bir hesapta bir aktif API anahtarı bulunur; anahtar 30 gün geçerlidir ve tam değeri yalnızca oluşturma yanıtında gösterilir. Varsayılan kota günlük 50 üretim isteği ve dakikada 5 çağrıdır. Yönetici bunları kullanıcı bazında değiştirebilir. Yenileme günlük kullanımı sıfırlamaz. Model listesi günlük üretim kotasını tüketmez; başarısız upstream çağrılarında günlük kota iade edilir. Günlük sayaç UTC 00:00'da yenilenir. Kapatılmış kullanıcıların oturumları ve API anahtarları erişemez. Eski ortak sahip tokenı artık kabul edilmez.
+Bir hesapta bir aktif API anahtarı bulunur; anahtar 30 gün geçerlidir ve tam değeri yalnızca oluşturma yanıtında gösterilir. Varsayılan kota dakikada 5, saatte 20, günde 50 ve haftada 200 üretim isteğidir. Yönetici bunları kullanıcı bazında değiştirebilir. Yenileme kullanım sayaçlarını sıfırlamaz. Model listesi dakika hız sınırına tabidir, ancak saatlik/günlük/haftalık üretim kotalarını tüketmez; başarısız upstream çağrılarında üretim kotası iade edilir. Saatlik ve günlük sayaçlar UTC sınırında, haftalık sayaç pazartesi UTC 00:00'da yenilenir. Kapatılmış kullanıcıların oturumları ve API anahtarları erişemez. Eski ortak sahip tokenı artık kabul edilmez.
 
 ## Codex masaüstü ve CLI
 

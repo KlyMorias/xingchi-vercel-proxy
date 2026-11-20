@@ -26,7 +26,8 @@ function cookieFrom(res) { return res.headers["set-cookie"].split(";")[0]; }
 
 function memoryStore() {
   let state = { version: 1, users: { klymorias: { id: "admin-id", username: "KlyMorias", role: "admin", enabled: true,
-    password_hash: seededHash, session_version: 1, daily_limit: 50, requests_per_minute: 5, created_at: "2026-11-20T00:00:00.000Z" } },
+    password_hash: seededHash, session_version: 1, hourly_limit: 20, daily_limit: 50, weekly_limit: 200,
+    requests_per_minute: 5, created_at: "2026-11-20T00:00:00.000Z" } },
   sessions: {}, keys: {}, usage: {}, reservations: {}, login_attempts: {} };
   return {
     readState: async () => structuredClone(state),
@@ -211,19 +212,29 @@ test("admin-created accounts have private hashes and configurable bounded limits
   const admin = await login();
   const res = response();
   await fixture.usersHandler(request({ cookie: cookieFrom(admin), body: {
-    username: "Guest_1", password: "guest-password", daily_limit: 120, requests_per_minute: 12,
+    username: "Guest_1", password: "guest-password", hourly_limit: 30, daily_limit: 120, weekly_limit: 480, requests_per_minute: 12,
   } }), res);
   assert.equal(res.statusCode, 201);
   assert.equal(JSON.parse(res.body).user.daily_limit, 120);
+  assert.equal(JSON.parse(res.body).user.hourly_limit, 30);
+  assert.equal(JSON.parse(res.body).user.weekly_limit, 480);
   const stored = fixture.store.snapshot().users.guest_1;
   assert.notEqual(stored.password_hash, "guest-password");
   assert.equal(await verifyPassword("guest-password", stored.password_hash), true);
+  const changedLimits = response();
+  await fixture.usersHandler(request({ method: "PATCH", cookie: cookieFrom(admin), body: {
+    username: "Guest_1", hourly_limit: 40, weekly_limit: 500,
+  } }), changedLimits);
+  assert.equal(changedLimits.statusCode, 200);
+  assert.equal(JSON.parse(changedLimits.body).user.hourly_limit, 40);
+  assert.equal(JSON.parse(changedLimits.body).user.weekly_limit, 500);
   const listed = response();
   await fixture.usersHandler(request({ method: "GET", cookie: cookieFrom(admin) }), listed);
   assert.equal(listed.statusCode, 200);
   assert.equal(listed.body.includes(stored.password_hash), false);
   assert.equal(listed.body.includes("session_version"), false);
-  for (const payload of [{ daily_limit: 0 }, { requests_per_minute: 1001 }, { password: "short" }]) {
+  for (const payload of [{ hourly_limit: 0 }, { daily_limit: 0 }, { weekly_limit: 1000001 },
+    { requests_per_minute: 1001 }, { password: "short" }]) {
     const invalid = response();
     await fixture.usersHandler(request({ cookie: cookieFrom(admin), body: { username: "Guest_2", password: "guest-password", ...payload } }), invalid);
     assert.equal(invalid.statusCode, 400);

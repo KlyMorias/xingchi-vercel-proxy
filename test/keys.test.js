@@ -6,12 +6,13 @@ const { createHandler } = require("../api/keys.js");
 
 function seed() {
   return { version: 1, users: { alice: { id: "user-alice", username: "alice", role: "user", enabled: true,
-    daily_limit: 50, requests_per_minute: 5 }, bob: { id: "user-bob", username: "bob", role: "user", enabled: true,
-    daily_limit: 50, requests_per_minute: 5 } }, sessions: {}, keys: {}, usage: {}, reservations: {}, login_attempts: {} };
+    hourly_limit: 20, daily_limit: 50, weekly_limit: 200, requests_per_minute: 5 }, bob: { id: "user-bob", username: "bob", role: "user", enabled: true,
+    hourly_limit: 20, daily_limit: 50, weekly_limit: 200, requests_per_minute: 5 } }, sessions: {}, keys: {}, usage: {}, reservations: {}, login_attempts: {} };
 }
 function fixture() {
   let state = seed();
   let version = 0;
+  let now = Math.floor(Date.now() / 1000);
   const client = {
     async get(_path, options) {
       assert.equal(options.access, "private");
@@ -31,7 +32,8 @@ function fixture() {
     },
   };
   const storage = createStateStore(client, { attempts: 30, pause: async () => {} });
-  return { store: createKeyStore(storage), state: () => state, change(callback) { callback(state); version++; } };
+  return { store: createKeyStore(storage, { now: () => now }), state: () => state,
+    change(callback) { callback(state); version++; }, setNow(value) { now = value; } };
 }
 const originalEnv = { ...process.env };
 test.beforeEach(() => { process.env.BLOB_STORE_ID = "store_test"; });
@@ -75,6 +77,48 @@ test("concurrent admissions never exceed the per-account minute limit", async ()
   assert.equal(admissions.filter((r) => r.code === "rate_limited").length, 7);
   assert.equal(f.state().usage["user-alice"].used_today, 5);
   assert.equal(f.state().usage["user-alice"].used_minute, 5);
+});
+
+test("hourly and weekly caps are enforced on billable calls while model lists preserve production quotas", async () => {
+  const hourly = fixture();
+  hourly.change((state) => { state.users.alice.hourly_limit = 2; state.users.alice.requests_per_minute = 10; });
+  const { api_key } = await hourly.store.createKey("user-alice");
+  assert.equal((await hourly.store.reserve(api_key)).ok, true);
+  assert.equal((await hourly.store.reserve(api_key)).ok, true);
+  const hourlyExhausted = await hourly.store.reserve(api_key);
+  assert.equal(hourlyExhausted.code, "hourly_limit_exceeded");
+  assert.ok(hourlyExhausted.retryAfter > 0);
+
+  const weekly = fixture();
+  weekly.change((state) => { state.users.alice.weekly_limit = 2; state.users.alice.requests_per_minute = 10; });
+  const weeklyKey = (await weekly.store.createKey("user-alice")).api_key;
+  assert.equal((await weekly.store.reserve(weeklyKey)).ok, true);
+  assert.equal((await weekly.store.reserve(weeklyKey)).ok, true);
+  const weeklyExhausted = await weekly.store.reserve(weeklyKey);
+  assert.equal(weeklyExhausted.code, "weekly_limit_exceeded");
+  assert.ok(weeklyExhausted.retryAfter > 0);
+  const modelList = await weekly.store.reserve(weeklyKey, { consumeDaily: false });
+  assert.equal(modelList.ok, true);
+  assert.equal(modelList.reservation, null);
+  assert.equal(weekly.state().usage["user-alice"].used_this_week, 2);
+});
+
+test("hour, day and Monday-based week usage reset and old refunds do not touch new windows", async () => {
+  const f = fixture();
+  const monday = Math.floor(Date.parse("2026-11-16T00:10:00Z") / 1000);
+  f.setNow(monday);
+  const { api_key } = await f.store.createKey("user-alice");
+  const old = await f.store.reserve(api_key);
+  f.setNow(monday + 8 * 86400);
+  const current = await f.store.reserve(api_key);
+  await f.store.release(old.reservation);
+  assert.equal(f.state().usage["user-alice"].used_this_hour, 1);
+  assert.equal(f.state().usage["user-alice"].used_today, 1);
+  assert.equal(f.state().usage["user-alice"].used_this_week, 1);
+  assert.equal((await f.store.getAccountInfo("user-alice")).usage.used_this_week, 1);
+  await f.store.release(current.reservation);
+  assert.deepEqual((await f.store.getAccountInfo("user-alice")).usage,
+    { used_this_hour: 0, remaining_this_hour: 20, used_today: 0, remaining_today: 50, used_this_week: 0, remaining_this_week: 200 });
 });
 
 test("daily cap is account-based, persists after rotation and is independent from models listing", async () => {
@@ -145,6 +189,8 @@ test("authenticated key API creates, reports account limits and revokes the key"
   assert.equal(read.statusCode, 200);
   assert.equal(read.body.includes(payload.api_key), false);
   assert.equal(JSON.parse(read.body).key.prefix, payload.key.prefix);
+  assert.equal(JSON.parse(read.body).limits.hourly_requests, 20);
+  assert.equal(JSON.parse(read.body).limits.weekly_requests, 200);
   const removed = response();
   await handler(request({ method: "DELETE" }), removed);
   assert.equal(removed.statusCode, 204);

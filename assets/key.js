@@ -2,7 +2,7 @@
   "use strict";
 
   const byId = (id) => document.getElementById(id);
-  const state = { user: null, users: [], key: null, secret: null, revealed: false, busy: false, daily: 50, minute: 5, model: "gpt-6.1-sol", loaded: false, userMode: "create" };
+  const state = { user: null, users: [], key: null, secret: null, revealed: false, busy: false, daily: 50, hourly: 20, weekly: 200, minute: 5, model: "gpt-6.1-sol", loaded: false, userMode: "create" };
   let toastTimeout;
 
   const formattedNumber = (number) => new Intl.NumberFormat("tr-TR").format(number);
@@ -88,22 +88,39 @@
 
   function render(data) {
     state.key = data.key || null;
-    state.daily = safeNumber(data.key?.daily_limit ?? data.limits?.daily_requests, 50);
+    state.daily = safeNumber(data.limits?.daily_requests ?? data.key?.daily_limit, 50);
+    state.hourly = safeNumber(data.limits?.hourly_requests ?? data.key?.hourly_limit, 20);
+    state.weekly = safeNumber(data.limits?.weekly_requests ?? data.key?.weekly_limit, 200);
     state.minute = safeNumber(data.limits?.requests_per_minute, 5);
     state.model = typeof data.service?.model === "string" ? data.service.model : "gpt-6.1-sol";
     state.loaded = true;
     const usage = safeNumber(state.key?.used_today ?? data.usage?.used_today, 0);
     const remaining = safeNumber(state.key?.remaining_today ?? data.usage?.remaining_today, Math.max(0, state.daily - usage));
+    const hourlyUsage = safeNumber(data.usage?.used_this_hour ?? state.key?.used_this_hour, 0);
+    const hourlyRemaining = safeNumber(data.usage?.remaining_this_hour ?? state.key?.remaining_this_hour, Math.max(0, state.hourly - hourlyUsage));
+    const weeklyUsage = safeNumber(data.usage?.used_this_week ?? state.key?.used_this_week, 0);
+    const weeklyRemaining = safeNumber(data.usage?.remaining_this_week ?? state.key?.remaining_this_week, Math.max(0, state.weekly - weeklyUsage));
 
     byId("daily-limit").textContent = formattedNumber(state.daily);
     byId("empty-daily-limit").textContent = formattedNumber(state.daily);
     byId("minute-limit").textContent = formattedNumber(state.minute);
     byId("usage-count").textContent = formattedNumber(usage);
-    byId("model-name").textContent = state.model;
+    byId("model-page-name").textContent = state.model;
+    byId("model-page-id").textContent = state.model;
     byId("model-id").value = state.model;
     byId("remaining-label").textContent = `${formattedNumber(remaining)} istek kaldı · Her gün yenilenir`;
     byId("usage-progress").max = state.daily || 1;
     byId("usage-progress").value = usage;
+    byId("hourly-limit").textContent = formattedNumber(state.hourly);
+    byId("hourly-usage-count").textContent = formattedNumber(hourlyUsage);
+    byId("hourly-remaining-label").textContent = `${formattedNumber(hourlyRemaining)} istek kaldı · Her saat yenilenir`;
+    byId("hourly-progress").max = state.hourly || 1;
+    byId("hourly-progress").value = hourlyUsage;
+    byId("weekly-limit").textContent = formattedNumber(state.weekly);
+    byId("weekly-usage-count").textContent = formattedNumber(weeklyUsage);
+    byId("weekly-remaining-label").textContent = `${formattedNumber(weeklyRemaining)} istek kaldı · Her hafta yenilenir`;
+    byId("weekly-progress").max = state.weekly || 1;
+    byId("weekly-progress").value = weeklyUsage;
     byId("key-loading").hidden = true;
     byId("key-error").hidden = true;
     byId("key-empty").hidden = Boolean(state.key);
@@ -282,12 +299,15 @@
 
   function selectView(view) {
     const users = view === "users" && state.user?.role === "admin";
-    byId("overview-view").hidden = users;
+    const models = view === "models";
+    byId("overview-view").hidden = users || models;
+    byId("models-view").hidden = !models;
     byId("users-view").hidden = !users;
-    byId("baslarken").hidden = users;
-    byId("nav-overview").classList.toggle("current", !users);
+    byId("baslarken").hidden = users || models;
+    byId("nav-overview").classList.toggle("current", !users && !models);
+    byId("nav-models").classList.toggle("current", models);
     byId("nav-users").classList.toggle("current", users);
-    byId("breadcrumb-page").textContent = users ? "Kullanıcılar" : "Genel bakış";
+    byId("breadcrumb-page").textContent = users ? "Kullanıcılar" : models ? "Modeller" : "Genel bakış";
     if (users) loadUsers();
   }
 
@@ -343,7 +363,7 @@
       info.append(name, element("span", "user-created", dateLabel(user.created_at) || "Hesap oluşturuldu"));
       identity.append(info);
       const limits = element("div", "user-limits");
-      limits.append(element("span", "", `${formattedNumber(user.daily_limit)} istek / gün`), element("span", "", `${formattedNumber(user.requests_per_minute)} istek / dakika`));
+      limits.append(element("span", "", `${formattedNumber(user.hourly_limit ?? 20)} / saat`), element("span", "", `${formattedNumber(user.daily_limit)} / gün`), element("span", "", `${formattedNumber(user.weekly_limit ?? 200)} / hafta`), element("span", "", `${formattedNumber(user.requests_per_minute)} / dakika`));
       const status = element("span", `user-state${user.enabled ? "" : " disabled"}`);
       status.append(element("span"), document.createTextNode(user.enabled ? "Aktif" : "Kapalı"));
       const own = user.username.toLowerCase() === state.user.username.toLowerCase();
@@ -379,8 +399,10 @@
     byId("user-password").required = mode !== "quota";
     byId("user-password").disabled = mode === "quota";
     byId("user-quota-group").hidden = mode === "password";
-    for (const id of ["user-daily", "user-minute"]) byId(id).disabled = mode === "password";
+    for (const id of ["user-daily", "user-hourly", "user-weekly", "user-minute"]) byId(id).disabled = mode === "password";
     byId("user-daily").value = user?.daily_limit ?? 50;
+    byId("user-hourly").value = user?.hourly_limit ?? 20;
+    byId("user-weekly").value = user?.weekly_limit ?? 200;
     byId("user-minute").value = user?.requests_per_minute ?? 5;
     byId("user-dialog-title").textContent = mode === "create" ? "Kullanıcı ekle" : mode === "quota" ? "Kullanım kotaları" : "Şifreyi sıfırla";
     byId("user-dialog-description").textContent = mode === "create" ? "Yeni kullanıcıya bir kullanıcı adı ve şifre belirle." : mode === "quota" ? "Bu hesaba ait anahtarların kullanım sınırlarını güncelle." : "Kullanıcının eski şifresi geçersiz olacak. Yeni şifreyi güvenli bir kanaldan ilet.";
@@ -398,6 +420,8 @@
     if (mode !== "quota") payload.password = byId("user-password").value;
     if (mode !== "password") {
       payload.daily_limit = Number(byId("user-daily").value);
+      payload.hourly_limit = Number(byId("user-hourly").value);
+      payload.weekly_limit = Number(byId("user-weekly").value);
       payload.requests_per_minute = Number(byId("user-minute").value);
     }
     byId("save-user").disabled = true;
@@ -454,6 +478,7 @@
   }
 
   byId("nav-overview").addEventListener("click", () => selectView("overview"));
+  byId("nav-models").addEventListener("click", () => selectView("models"));
   byId("nav-users").addEventListener("click", () => selectView("users"));
   document.querySelectorAll('a[href="#codex-setup"]').forEach((link) => link.addEventListener("click", () => selectView("overview")));
   byId("refresh-users").addEventListener("click", loadUsers);
