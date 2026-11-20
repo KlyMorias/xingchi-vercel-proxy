@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { BlobError, BlobPreconditionFailedError } = require("@vercel/blob");
 const { createStateStore } = require("../lib/state-store");
 const originalEnv = { ...process.env };
 test.afterEach(() => { process.env = { ...originalEnv }; });
@@ -177,4 +178,87 @@ test("CAS exhaustion preserves storage_busy and safe sequential conflict counts"
   await assert.rejects(store.mutateState((draft) => { draft.usage.cas = { used: 1 }; }), { code: "storage_busy", retryAfter: 2 });
   assert.deepEqual(logs.map((entry) => entry.attempt), [1, 2, 3]);
   assert.ok(logs.every((entry) => entry.reason === "conflict" && entry.phase === "write"));
+});
+
+test("a generic conditional-write conflict reloads the winning state before applying its mutation again", async () => {
+  configure();
+  const client = memoryBlob();
+  const originalPut = client.put.bind(client);
+  const writes = [];
+  const logs = [];
+  const store = createStateStore(client, { pause: async () => {}, warn: (entry) => logs.push(entry) });
+  await store.mutateState((draft) => { draft.usage.counter = { used: 0 }; });
+  let first = true;
+  client.put = async (path, text, options) => {
+    writes.push({ etag: options.ifMatch, count: JSON.parse(text).usage.counter.used });
+    if (first) {
+      first = false;
+      // An independent conditional writer wins after our stale snapshot.
+      // The failed operation is explicitly not committed by the provider.
+      const winner = JSON.parse(text);
+      winner.usage.counter.used = 7;
+      await originalPut(path, JSON.stringify(winner), options);
+      throw new BlobError("The conditional request cannot succeed due to a conflicting operation against this resource.");
+    }
+    return originalPut(path, text, options);
+  };
+  const seenCounts = [];
+  const result = await store.mutateState((draft) => {
+    seenCounts.push(draft.usage.counter.used);
+    draft.usage.counter.used++;
+    return draft.usage.counter.used;
+  });
+  assert.equal(result, 8);
+  assert.equal((await store.readState()).usage.counter.used, 8);
+  assert.deepEqual(seenCounts, [0, 7]);
+  assert.deepEqual(writes.map((entry) => entry.count), [1, 8]);
+  assert.notEqual(writes[0].etag, writes[1].etag);
+  assert.deepEqual(logs, [{ scope: "storage", phase: "write", reason: "conflict", attempt: 1 }]);
+});
+
+test("mixed real SDK conditional-conflict errors preserve all concurrent increments", async () => {
+  configure();
+  const client = memoryBlob();
+  const originalPut = client.put.bind(client);
+  const logs = [];
+  const store = createStateStore(client, { attempts: 20, pause: async () => {}, warn: (entry) => logs.push(entry) });
+  await store.mutateState((draft) => { draft.usage.counter = { used: 0 }; });
+  let staleCount = 0;
+  client.put = async (...args) => {
+    try { return await originalPut(...args); } catch {
+      staleCount++;
+      throw staleCount % 2 ? new BlobError("The conditional request cannot succeed due to a conflicting operation against this resource.")
+        : new BlobPreconditionFailedError();
+    }
+  };
+  await Promise.all(Array.from({ length: 8 }, () => store.mutateState((draft) => {
+    draft.usage.counter.used++;
+  })));
+  assert.equal((await store.readState()).usage.counter.used, 8);
+  assert.ok(staleCount >= 2);
+  assert.ok(logs.every((entry) => entry.reason === "conflict" && entry.phase === "write"));
+  assert.ok(logs.every((entry) => Object.keys(entry).sort().join(",") === "attempt,phase,reason,scope"));
+});
+
+test("unrecognized generic SDK Blob errors do not retry or disclose their messages", async () => {
+  configure();
+  for (const message of [undefined, "Unknown conditional operation private detail", "The conditional request cannot succeed due to a conflicting operation against this resource. Extra private detail"]) {
+    const client = memoryBlob();
+    const logs = [];
+    const store = createStateStore(client, { pause: async () => {}, warn: (entry) => logs.push(entry) });
+    await store.mutateState((draft) => { draft.usage.counter = { used: 0 }; });
+    let writes = 0;
+    let mutations = 0;
+    client.put = async () => { writes++; throw new BlobError(message); };
+    await assert.rejects(store.mutateState((draft) => {
+      mutations++;
+      draft.usage.counter.used++;
+    }), { code: "write_unavailable" });
+    assert.equal(writes, 1);
+    assert.equal(mutations, 1);
+    assert.equal((await store.readState()).usage.counter.used, 0);
+    assert.equal(logs[0].reason, "invalid");
+    assert.equal(logs[0].sdkClass, "BlobError");
+    assert.equal(JSON.stringify(logs).includes("private detail"), false);
+  }
 });
