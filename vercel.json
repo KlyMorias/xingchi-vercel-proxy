@@ -29,7 +29,7 @@
   ],
   "functions": {
     "api/**/*.js": {
-      "maxDuration": 55,
+      "maxDuration": 300,
       "supportsCancellation": true
     }
   }

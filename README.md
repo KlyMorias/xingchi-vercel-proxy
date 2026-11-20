@@ -36,10 +36,12 @@ vercel integration add upstash/upstash-kv --name klyapi-keys --billing-plan free
 
 İlk kurulumda Vercel, Upstash sözleşmesinin hesap sahibi tarafından kabulünü ister. Bu adım tamamlanmadan kişisel anahtar oluşturma çalışmaz. Kaynak kodu ve sır içermeyen panel yayımlanabilir. Ortam değişkenlerinden sonra `vercel deploy --prod --yes` ile yeniden dağıt.
 
-## Mevcut sağlayıcı kısıtlaması
+## İstemci uyumluluğu
 
-20 Kasım 2026'da model listesi çalıştı; standart Responses API isteği upstream'den `403 client_not_allowed`, Chat Completions isteği `chat_completions_disabled` aldı. Panel bu durumu açıkça gösterir. Geçit sağlayıcı izinlerini değiştirmez ve onaylı bir kodlama istemcisinin kimliğini taklit etmez.
+Upstream yalnızca kodlama istemcisi biçimindeki Responses API çağrılarını kabul ediyor. Geçit upstream'e Codex uyumlu Responses gövdesi ve istemci başlıkları gönderir; `User-Agent` içinde KlyAPI uyumluluk geçidi olduğu da belirtilir. Chat Completions ve Anthropic Messages gövdeleri Responses'a, sonuçlar çağıran uygulamanın beklediği biçime dönüştürülür. Upstream her zaman akışlı çağrılır; JSON isteyen istemciler için tamamlanmış yanıt birleştirilir. Akışlı isteyenler için olaylar ilgili protokole dönüştürülür.
+
+Metin, görsel girdiler, işlev araçları ve araç sonuçları desteklenir. Ses, belge blokları, bir çağrıda birden fazla çıktı ve dönüştürülemeyen seçenekler açıklayıcı bir 400 hatası verir. Kesilen upstream akışları başarılı yanıt gibi gösterilmez. Bu, tüm uygulama ve model özelliklerinin birebir desteklendiği anlamına gelmez.
 
 ## Kontrol
 
-Node.js 20 veya üzerinde `npm test`. Testler kimlik doğrulama, JSON boyut sınırı, streaming, upstream hataları, Redis arızasında erişimin kapanması, tek seferlik anahtar gösterimi, origin kontrolü, kota rezervasyonu ve hata iadesini kapsar. Gerçek Redis bağlantısıyla eşzamanlı kota ve iptal akışı da dağıtım sonrasında doğrulanmalıdır.
+Node.js 20 veya üzerinde `npm test`. Testler protokol dönüşümü, araç akışları, UTF-8/SSE parçaları, kimlik doğrulama, JSON boyut sınırı, upstream hataları, Redis arızasında erişimin kapanması, tek seferlik anahtar gösterimi, origin kontrolü, kota rezervasyonu ve hata iadesini kapsar. Gerçek Redis bağlantısıyla eşzamanlı kota ve iptal akışı da dağıtım sonrasında doğrulanmalıdır.

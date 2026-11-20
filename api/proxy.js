@@ -1,5 +1,8 @@
 const crypto = require("node:crypto");
 const keyStore = require("../lib/key-store");
+const { chatRequestToResponses, chatCompletionFromResponse, createChatStream } = require("../lib/openai-compat");
+const { messagesRequestToResponses, messageFromResponse, createMessagesStream } = require("../lib/anthropic-compat");
+const { collectResponse, streamResponse } = require("../lib/responses-transport");
 
 const UPSTREAM_ORIGIN = "https://api.xingchiapi.com";
 const MAX_BODY_BYTES = 1_000_000;
@@ -114,6 +117,8 @@ function upstreamHeaders(req, apiKey, authMode) {
   const headers = new Headers({
     "content-type": "application/json",
     "accept-encoding": "identity",
+    "user-agent": "codex_cli_rs/0.77.0 (KlyAPI Responses compatibility gateway)",
+    "originator": "codex_cli_rs",
   });
 
   for (const name of ["accept", "anthropic-version", "anthropic-beta", "openai-beta"]) {
@@ -202,6 +207,9 @@ return async function handler(req, res) {
   }
 
   let body;
+  let clientPayload;
+  let clientStream = false;
+  const format = path === "v1/messages" ? "messages" : path === "v1/chat/completions" ? "chat" : "responses";
   if (req.method === "POST") {
     const contentType = req.headers["content-type"] || "";
     if (!contentType.toLowerCase().startsWith("application/json")) {
@@ -218,7 +226,26 @@ return async function handler(req, res) {
         sendJson(res, 400, "Only one output per request is supported");
         return;
       }
-      body = enforceOutputLimit({ ...payload, model: "gpt-6.1-sol" }, path);
+      if (payload.stream !== undefined && typeof payload.stream !== "boolean") {
+        sendJson(res, 400, "stream must be a boolean");
+        return;
+      }
+      clientStream = payload.stream === true;
+      clientPayload = JSON.parse(enforceOutputLimit({ ...payload, model: "gpt-6.1-sol" }, path));
+      let upstreamPayload;
+      if (format === "chat") upstreamPayload = chatRequestToResponses(clientPayload);
+      else if (format === "messages") upstreamPayload = messagesRequestToResponses(clientPayload);
+      else {
+        if (typeof clientPayload.input !== "string" && !Array.isArray(clientPayload.input)) {
+          sendJson(res, 400, "input must be text or an array of Responses items");
+          return;
+        }
+        upstreamPayload = { ...clientPayload };
+        if (typeof upstreamPayload.input === "string") {
+          upstreamPayload.input = [{ role: "user", content: [{ type: "input_text", text: upstreamPayload.input }] }];
+        }
+      }
+      body = JSON.stringify({ ...upstreamPayload, instructions: upstreamPayload.instructions || "You are a helpful assistant.", stream: true, store: false });
     } catch (error) {
       sendJson(res, error.statusCode || 400, error.message);
       return;
@@ -248,9 +275,9 @@ return async function handler(req, res) {
     quotaSettled = true;
     await store.release(reservation);
   };
-  const url = `${UPSTREAM_ORIGIN}/${path}`;
+  const url = `${UPSTREAM_ORIGIN}/${req.method === "POST" ? "v1/responses" : path}`;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 50_000);
+  const timeout = setTimeout(() => controller.abort(), 280_000);
   const abortOnClientDisconnect = () => controller.abort();
   const abortOnResponseClose = () => {
     if (!res.writableEnded) controller.abort();
@@ -265,12 +292,32 @@ return async function handler(req, res) {
       redirect: "manual",
       signal: controller.signal,
     });
-    if (!upstream.ok) await refund();
-    await writeUpstreamResponse(upstream, res);
-  } catch {
+    if (!upstream.ok) {
+      await refund();
+      await writeUpstreamResponse(upstream, res);
+    } else if (req.method === "GET") {
+      await writeUpstreamResponse(upstream, res);
+    } else if (clientStream) {
+      const adapter = format === "chat" ? createChatStream("gpt-6.1-sol", { includeUsage: clientPayload.stream_options?.include_usage === true })
+        : format === "messages" ? createMessagesStream("gpt-6.1-sol") : null;
+      await streamResponse(upstream, res, format, adapter);
+    } else {
+      const response = await collectResponse(upstream);
+      const result = format === "chat" ? chatCompletionFromResponse(response, "gpt-6.1-sol")
+        : format === "messages" ? messageFromResponse(response, "gpt-6.1-sol") : response;
+      res.statusCode = 200;
+      res.setHeader("content-type", "application/json; charset=utf-8");
+      res.setHeader("cache-control", "no-store");
+      res.end(JSON.stringify(result));
+    }
+  } catch (error) {
     try { await refund(); } catch { /* Reserved requests expire at the daily reset. */ }
     if (!res.destroyed && !res.headersSent) sendJson(res, 502, "Upstream request failed");
-    else if (!res.destroyed) res.end();
+    else if (!res.destroyed) {
+      const failure = { error: { type: "api_error", message: "Upstream generation failed" } };
+      res.end(format === "messages" ? `event: error\ndata: ${JSON.stringify({ type: "error", ...failure })}\n\n`
+        : `data: ${JSON.stringify(failure)}\n\n`);
+    }
   } finally {
     clearTimeout(timeout);
     req.off?.("aborted", abortOnClientDisconnect);

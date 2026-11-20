@@ -71,8 +71,8 @@ test("supports Upstash credentials and creates an opaque secure anonymous sessio
   assert.match(res.headers["set-cookie"], /^kly_session=[A-Za-z0-9_-]{43}; Path=\/; Max-Age=2592000; HttpOnly; Secure; SameSite=Strict$/);
   assert.deepEqual(JSON.parse(res.body), {
     key: null, limits: { daily_requests: 50, requests_per_minute: 5 },
-    service: { model: "gpt-6.1-sol", generation_available: false,
-      message: "Sağlayıcı genel istemci erişimini henüz açmadı." },
+    service: { model: "gpt-6.1-sol", generation_available: true,
+      message: "gpt-6.1-sol erişimi açık. OpenAI veya Anthropic uyumlu uygulamanı bağlayabilirsin." },
   });
   assert.equal(res.headers["cache-control"], "private, no-store");
 });

@@ -4,7 +4,7 @@ const { EventEmitter } = require("node:events");
 
 const handler = require("../api/proxy.js");
 
-function makeRequest({ method = "POST", path = ["v1", "messages"], headers = {}, body = "{}" } = {}) {
+function makeRequest({ method = "POST", path = ["v1", "responses"], headers = {}, body = '{"input":"hello"}' } = {}) {
   return {
     method,
     query: { path },
@@ -35,9 +35,32 @@ function makeResponse() {
       this.body = Buffer.concat(chunks).toString("utf8");
       this.headersSent = true;
       this.ended = true;
+      this.writableEnded = true;
     },
+    on: events.on.bind(events),
+    off: events.off.bind(events),
     once: events.once.bind(events),
   };
+}
+
+function responseFixture(text = "OK") {
+  return {
+    id: "resp_test", object: "response", status: "completed", created_at: 1795160000,
+    model: "gpt-6.1-sol",
+    output: [{ id: "msg_test", type: "message", role: "assistant", status: "completed",
+      content: [{ type: "output_text", text, annotations: [] }] }],
+    usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 },
+  };
+}
+
+function successfulResponse(text = "OK") {
+  return new Response(JSON.stringify(responseFixture(text)), {
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function eventFrame(event) {
+  return Buffer.from(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
 }
 
 const originalFetch = global.fetch;
@@ -60,14 +83,14 @@ test("rejects unauthorized callers without contacting Xingchi", async () => {
   assert.equal(calls, 0);
 });
 
-test("forwards an allowed message route with server-side credentials", async () => {
+test("uses server-side credentials and the Responses upstream for a normal JSON client", async () => {
   process.env.PROXY_ACCESS_TOKEN = "p".repeat(40);
   process.env.XINGCHI_API_KEY = "upstream-secret";
   process.env.UPSTREAM_AUTH_MODE = "x-api-key";
   let observed;
   global.fetch = async (url, options) => {
     observed = { url, options };
-    return new Response('{"ok":true}', { status: 200, headers: { "content-type": "application/json" } });
+    return successfulResponse();
   };
 
   const res = makeResponse();
@@ -78,16 +101,23 @@ test("forwards an allowed message route with server-side credentials", async () 
       "anthropic-version": "2023-06-01",
       "x-api-key": "client-token",
     },
-    body: '{"model":"gpt-6.1-sol","messages":[]}',
+    body: '{"model":"gpt-6.1-sol","input":"hello"}',
   }), res);
 
-  assert.equal(observed.url, "https://api.xingchiapi.com/v1/messages");
+  assert.equal(observed.url, "https://api.xingchiapi.com/v1/responses");
   assert.equal(observed.options.headers.get("x-api-key"), "upstream-secret");
   assert.equal(observed.options.headers.get("authorization"), null);
   assert.equal(observed.options.headers.get("anthropic-version"), "2023-06-01");
-  assert.equal(observed.options.body, '{"model":"gpt-6.1-sol","messages":[],"max_tokens":2048}');
+  assert.match(observed.options.headers.get("user-agent"), /KlyAPI.*compatibility gateway/);
+  assert.equal(observed.options.headers.get("originator"), "codex_cli_rs");
+  const request = JSON.parse(observed.options.body);
+  assert.equal(request.stream, true);
+  assert.equal(request.store, false);
+  assert.equal(request.max_output_tokens, 2048);
+  assert.equal(request.input[0].role, "user");
+  assert.equal(request.input[0].content[0].text, "hello");
   assert.equal(res.statusCode, 200);
-  assert.equal(res.body, '{"ok":true}');
+  assert.deepEqual(JSON.parse(res.body), responseFixture());
   assert.equal(res.body.includes("upstream-secret"), false);
 });
 
@@ -138,22 +168,33 @@ test("rejects output limits above the configured ceiling", async () => {
   assert.equal(calls, 0);
 });
 
-test("preserves legacy OpenAI max_tokens without adding another limit field", async () => {
+test("translates Chat Completions and its legacy token limit into Responses and back", async () => {
   process.env.PROXY_ACCESS_TOKEN = "p".repeat(40);
   process.env.XINGCHI_API_KEY = "upstream-secret";
   let forwardedBody;
   global.fetch = async (_url, options) => {
     forwardedBody = options.body;
-    return new Response("{}", { status: 200 });
+    return successfulResponse();
   };
 
   const res = makeResponse();
   await handler(makeRequest({ path: ["v1", "chat", "completions"], headers: {
     authorization: `Bearer ${process.env.PROXY_ACCESS_TOKEN}`,
     "content-type": "application/json",
-  }, body: '{"model":"gpt-6.1-sol","messages":[],"max_tokens":300}' }), res);
+  }, body: '{"model":"gpt-6.1-sol","messages":[{"role":"user","content":"hello"}],"max_tokens":300}' }), res);
 
-  assert.equal(forwardedBody, '{"model":"gpt-6.1-sol","messages":[],"max_tokens":300}');
+  const upstream = JSON.parse(forwardedBody);
+  assert.equal(upstream.max_output_tokens, 300);
+  assert.equal(upstream.max_tokens, undefined);
+  assert.equal(upstream.max_completion_tokens, undefined);
+  assert.equal(upstream.input[0].content[0].text, "hello");
+  const completion = JSON.parse(res.body);
+  assert.equal(res.statusCode, 200);
+  assert.equal(completion.object, "chat.completion");
+  assert.equal(completion.choices[0].message.role, "assistant");
+  assert.equal(completion.choices[0].message.content, "OK");
+  assert.equal(completion.choices[0].finish_reason, "stop");
+  assert.equal(completion.usage.total_tokens, 5);
 });
 
 test("accepts a slash-separated query path produced by Vercel rewrites", async () => {
@@ -177,11 +218,15 @@ test("accepts a slash-separated query path produced by Vercel rewrites", async (
   assert.equal(res.body, '{"data":[]}');
 });
 
-test("forwards event stream chunks before the upstream stream finishes", async () => {
+test("forwards Responses events before the upstream generation finishes", async () => {
   process.env.PROXY_ACCESS_TOKEN = "p".repeat(40);
   process.env.XINGCHI_API_KEY = "upstream-secret";
-  const firstChunk = Buffer.from('data: {"delta":"hello"}\n\n');
-  const lastChunk = Buffer.from("data: [DONE]\n\n");
+  const created = { type: "response.created", response: { ...responseFixture(), status: "in_progress", output: [] } };
+  const delta = { type: "response.output_text.delta", item_id: "msg_test", output_index: 0,
+    content_index: 0, delta: "OK" };
+  const completed = { type: "response.completed", response: responseFixture() };
+  const firstChunk = eventFrame(created);
+  const lastChunk = Buffer.concat([eventFrame(delta), eventFrame(completed)]);
   let streamController;
   const stream = new ReadableStream({
     start(controller) {
@@ -205,7 +250,7 @@ test("forwards event stream chunks before the upstream stream finishes", async (
   const runningHandler = handler(makeRequest({ headers: {
     authorization: `Bearer ${process.env.PROXY_ACCESS_TOKEN}`,
     "content-type": "application/json",
-  }, body: '{"model":"gpt-6.1-sol","messages":[],"stream":true}' }), res);
+  }, body: '{"model":"gpt-6.1-sol","input":"hello","stream":true}' }), res);
 
   let writeTimeout;
   let closed = false;
@@ -224,8 +269,8 @@ test("forwards event stream chunks before the upstream stream finishes", async (
     await runningHandler;
 
     assert.equal(res.statusCode, 200);
-    assert.equal(res.headers["content-type"], "text/event-stream");
-    assert.deepEqual(res.writtenChunks, [firstChunk, lastChunk]);
+    assert.match(res.headers["content-type"], /^text\/event-stream/);
+    assert.deepEqual(res.writtenChunks, [firstChunk, eventFrame(delta), eventFrame(completed)]);
     assert.equal(res.body, Buffer.concat([firstChunk, lastChunk]).toString("utf8"));
     assert.equal(res.ended, true);
   } finally {
@@ -297,7 +342,7 @@ test("accepts a personal key and reserves its generation quota before forwarding
   });
   global.fetch = async () => {
     sequence.push("upstream");
-    return new Response("{}", { status: 200 });
+    return successfulResponse();
   };
   const res = makeResponse();
   await personalHandler(makeRequest({ path: "v1/responses", headers: {
@@ -354,5 +399,89 @@ test("fails closed if the quota database is unavailable", async () => {
     authorization: "Bearer kly_" + "k".repeat(43),
   } }), res);
   assert.equal(res.statusCode, 503);
+  assert.equal(calls, 0);
+});
+
+test("translates Anthropic messages into Responses and returns an Anthropic message", async () => {
+  process.env.PROXY_ACCESS_TOKEN = "p".repeat(40);
+  process.env.XINGCHI_API_KEY = "upstream-secret";
+  let observed;
+  global.fetch = async (url, options) => {
+    observed = { url, payload: JSON.parse(options.body) };
+    return successfulResponse();
+  };
+
+  const res = makeResponse();
+  await handler(makeRequest({ path: "v1/messages", headers: {
+    "x-api-key": process.env.PROXY_ACCESS_TOKEN,
+    "content-type": "application/json",
+    "anthropic-version": "2023-06-01",
+  }, body: JSON.stringify({ model: "gpt-6.1-sol", system: "Be concise.", max_tokens: 128,
+    messages: [{ role: "user", content: "hello" }] }) }), res);
+
+  assert.equal(observed.url, "https://api.xingchiapi.com/v1/responses");
+  assert.equal(observed.payload.instructions, "Be concise.");
+  assert.equal(observed.payload.max_output_tokens, 128);
+  assert.equal(observed.payload.stream, true);
+  assert.equal(observed.payload.input[0].role, "user");
+  const message = JSON.parse(res.body);
+  assert.equal(res.statusCode, 200);
+  assert.equal(message.type, "message");
+  assert.equal(message.role, "assistant");
+  assert.deepEqual(message.content, [{ type: "text", text: "OK" }]);
+  assert.equal(message.stop_reason, "end_turn");
+  assert.deepEqual(message.usage, { input_tokens: 3, output_tokens: 2 });
+});
+
+test("collects an upstream Responses stream for a client that requested plain JSON", async () => {
+  process.env.PROXY_ACCESS_TOKEN = "p".repeat(40);
+  process.env.XINGCHI_API_KEY = "upstream-secret";
+  const frames = [
+    eventFrame({ type: "response.created", response: { ...responseFixture(), status: "in_progress", output: [] } }),
+    eventFrame({ type: "response.output_text.delta", item_id: "msg_test", content_index: 0, output_index: 0, delta: "OK" }),
+    eventFrame({ type: "response.completed", response: responseFixture() }),
+  ];
+  global.fetch = async () => new Response(Buffer.concat(frames), {
+    headers: { "content-type": "text/event-stream" },
+  });
+  const res = makeResponse();
+  await handler(makeRequest({ headers: {
+    authorization: `Bearer ${process.env.PROXY_ACCESS_TOKEN}`, "content-type": "application/json",
+  } }), res);
+
+  assert.equal(res.statusCode, 200);
+  assert.match(res.headers["content-type"], /^application\/json/);
+  assert.deepEqual(JSON.parse(res.body), responseFixture());
+  assert.equal(res.writtenChunks.length, 1);
+});
+
+test("reports a truncated generation stream instead of manufacturing completion", async () => {
+  process.env.PROXY_ACCESS_TOKEN = "p".repeat(40);
+  process.env.XINGCHI_API_KEY = "upstream-secret";
+  global.fetch = async () => new Response(eventFrame({ type: "response.created", response: {
+    ...responseFixture(), status: "in_progress", output: [],
+  } }), { headers: { "content-type": "text/event-stream" } });
+  const res = makeResponse();
+  await handler(makeRequest({ headers: {
+    authorization: `Bearer ${process.env.PROXY_ACCESS_TOKEN}`, "content-type": "application/json",
+  }, body: '{"input":"hello","stream":true}' }), res);
+
+  assert.equal(res.ended, true);
+  assert.match(res.body, /"error"/);
+  assert.doesNotMatch(res.body, /response\.completed|\[DONE\]/);
+});
+
+test("rejects unavailable models and multiple outputs without an upstream request", async () => {
+  process.env.PROXY_ACCESS_TOKEN = "p".repeat(40);
+  process.env.XINGCHI_API_KEY = "upstream-secret";
+  let calls = 0;
+  global.fetch = async () => { calls++; throw new Error("must not be called"); };
+  for (const payload of [{ input: "hello", model: "other-model" }, { input: "hello", n: 2 }]) {
+    const res = makeResponse();
+    await handler(makeRequest({ headers: {
+      authorization: `Bearer ${process.env.PROXY_ACCESS_TOKEN}`, "content-type": "application/json",
+    }, body: JSON.stringify(payload) }), res);
+    assert.equal(res.statusCode, 400);
+  }
   assert.equal(calls, 0);
 });

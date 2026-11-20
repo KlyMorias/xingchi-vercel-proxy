@@ -76,6 +76,14 @@
     updateExample();
   }
 
+  function renderService(service) {
+    const available = service?.generation_available === true;
+    byId("service-notice").classList.toggle("available", available);
+    byId("service-title").textContent = available ? "Model erişimi açık" : "Üretim erişimi bekleniyor";
+    byId("service-message").textContent = service?.message || "Model erişimi kontrol ediliyor.";
+    byId("service-tag").textContent = available ? "Kullanılabilir" : "Sağlayıcı kısıtlaması";
+  }
+
   function render(data) {
     state.key = data.key || null;
     state.daily = safeNumber(data.key?.daily_limit ?? data.limits?.daily_requests, 50);
@@ -114,11 +122,7 @@
       updateExample();
     }
 
-    const available = data.service?.generation_available === true;
-    byId("service-notice").classList.toggle("available", available);
-    byId("service-title").textContent = available ? "Üretim erişimi açık" : "Üretim erişimi bekleniyor";
-    byId("service-message").textContent = data.service?.message || (available ? "API anahtarınla model istekleri gönderebilirsin." : "Sağlayıcı genel istemci erişimini henüz açmadı. Anahtarını şimdiden oluşturabilirsin.");
-    byId("service-tag").textContent = available ? "Kullanılabilir" : "Sağlayıcı kısıtlaması";
+    renderService(data.service);
     setBusy(state.busy);
   }
 
@@ -243,5 +247,7 @@
     else updateExample();
   });
   setBusy(false);
+  fetch("/api", { cache: "no-store" }).then((response) => response.ok ? response.json() : null)
+    .then((service) => { if (service) renderService(service); }).catch(() => {});
   refresh();
 })();
