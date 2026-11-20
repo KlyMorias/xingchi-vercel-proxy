@@ -31,7 +31,7 @@ test("a truncated provider stream does not become a successful response", async 
 
 test("a provider terminal failure is surfaced instead of hiding it", async () => {
   const source = upstream([Buffer.from('data: {"type":"response.failed","response":{"error":{"message":"Denied"}}}\n\n')]);
-  await assert.rejects(collectResponse(source), /Denied/);
+  await assert.rejects(collectResponse(source), { statusCode: 502, code: "upstream_generation_failed" });
 });
 
 test("streaming Responses retain named events and their payloads", async () => {

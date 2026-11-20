@@ -28,6 +28,7 @@ function makeResponse() {
     body: "",
     writtenChunks: chunks,
     setHeader(name, value) { this.headers[name.toLowerCase()] = value; },
+    getHeader(name) { return this.headers[name.toLowerCase()]; },
     write(chunk) {
       this.headersSent = true;
       chunks.push(Buffer.from(chunk));
@@ -487,4 +488,42 @@ test("rejects unavailable models and multiple outputs without an upstream reques
     assert.equal(res.statusCode, 400);
   }
   assert.equal(calls, 0);
+});
+
+test("a slow nonstream provider sends valid JSON keepalive before returning the final response", async () => {
+  process.env.XINGCHI_API_KEY = "upstream-secret";
+  let finishFetch;
+  global.fetch = async () => new Promise((resolve) => { finishFetch = resolve; });
+  const slowHandler = proxyModule.createHandler({ isConfigured: () => true,
+    reserve: async () => ({ ok: true, reservation: null }), release: async () => {} }, { keepaliveIntervalMs: 5 });
+  const res = makeResponse();
+  let firstWrite;
+  const first = new Promise((resolve) => { firstWrite = resolve; });
+  const originalWrite = res.write.bind(res);
+  res.write = (chunk) => { const result = originalWrite(chunk); firstWrite(); return result; };
+  const running = slowHandler(makeRequest({ headers: {
+    authorization: "Bearer kly_" + "k".repeat(43), "content-type": "application/json",
+  } }), res);
+  await first;
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.writtenChunks[0].toString(), "\n ");
+  finishFetch(successfulResponse("delayed OK"));
+  await running;
+  assert.equal(JSON.parse(res.body).output[0].content[0].text, "delayed OK");
+});
+
+test("refund storage failure never hides the original upstream HTTP error", async () => {
+  process.env.XINGCHI_API_KEY = "upstream-secret";
+  const originalError = '{"error":{"code":"overloaded","message":"Retry later"}}';
+  global.fetch = async () => new Response(originalError, { status: 503, headers: { "content-type": "application/json" } });
+  const failureHandler = proxyModule.createHandler({ isConfigured: () => true,
+    reserve: async () => ({ ok: true, reservation: { id: "refund-ticket" } }),
+    release: async () => { throw new Error("storage unavailable"); } });
+  const res = makeResponse();
+  await failureHandler(makeRequest({ headers: {
+    authorization: "Bearer kly_" + "k".repeat(43), "content-type": "application/json",
+  } }), res);
+  assert.equal(res.statusCode, 503);
+  assert.equal(res.headers["x-klyapi-error-source"], "upstream");
+  assert.equal(res.body, originalError);
 });

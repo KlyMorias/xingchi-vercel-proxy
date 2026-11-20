@@ -2,6 +2,7 @@ const keyStore = require("../lib/key-store");
 const { chatRequestToResponses, chatCompletionFromResponse, createChatStream } = require("../lib/openai-compat");
 const { messagesRequestToResponses, messageFromResponse, createMessagesStream } = require("../lib/anthropic-compat");
 const { collectResponse, streamResponse } = require("../lib/responses-transport");
+const { startKeepalive } = require("../lib/client-keepalive");
 
 const UPSTREAM_ORIGIN = "https://api.xingchiapi.com";
 const MAX_BODY_BYTES = 1_000_000;
@@ -17,6 +18,10 @@ function sendJson(res, status, message) {
   res.setHeader("content-type", "application/json; charset=utf-8");
   res.setHeader("cache-control", "no-store");
   res.end(JSON.stringify({ error: message }));
+}
+
+function diagnostics(phase, fields = {}) {
+  console.warn(JSON.stringify({ scope: "proxy", phase, ...fields }));
 }
 
 function requestCredentials(req) {
@@ -154,12 +159,12 @@ async function writeUpstreamResponse(upstream, res) {
   }
 }
 
-function createHandler(store = keyStore) {
+function createHandler(store = keyStore, { keepaliveIntervalMs = 8000 } = {}) {
 return async function handler(req, res) {
   res.setHeader("access-control-allow-origin", "*");
   res.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
   res.setHeader("access-control-allow-headers", "authorization, content-type, x-api-key, x-proxy-key, anthropic-version, anthropic-beta, openai-beta, anthropic-dangerous-direct-browser-access");
-  res.setHeader("access-control-expose-headers", "retry-after, x-request-id");
+  res.setHeader("access-control-expose-headers", "retry-after, x-request-id, x-klyapi-error-source");
   if (req.method === "OPTIONS") {
     res.statusCode = 204;
     res.setHeader("allow", "GET, POST, OPTIONS");
@@ -252,7 +257,10 @@ return async function handler(req, res) {
         return;
       }
       reservation = access.reservation;
-    } catch {
+    } catch (error) {
+      diagnostics("quota", { reason: ["read_unavailable", "write_unavailable", "storage_busy"].includes(error.code) ? error.code : "storage_unavailable" });
+      res.setHeader("x-klyapi-error-source", "quota_storage");
+      res.setHeader("retry-after", "2");
       sendJson(res, 503, "Key service is temporarily unavailable");
       return;
     }
@@ -261,8 +269,8 @@ return async function handler(req, res) {
   let quotaSettled = false;
   const refund = async () => {
     if (!reservation || quotaSettled) return;
-    quotaSettled = true;
     await store.release(reservation);
+    quotaSettled = true;
   };
   const url = `${UPSTREAM_ORIGIN}/${req.method === "POST" ? "v1/responses" : path}`;
   const controller = new AbortController();
@@ -273,6 +281,8 @@ return async function handler(req, res) {
   };
   req.on?.("aborted", abortOnClientDisconnect);
   res.on?.("close", abortOnResponseClose);
+  const keepalive = req.method === "POST" ? startKeepalive(res, { stream: clientStream, intervalMs: keepaliveIntervalMs }) : null;
+  let phase = "fetch";
   try {
     const upstream = await fetch(url, {
       method: req.method,
@@ -282,32 +292,52 @@ return async function handler(req, res) {
       signal: controller.signal,
     });
     if (!upstream.ok) {
-      await refund();
-      await writeUpstreamResponse(upstream, res);
+      diagnostics("upstream_http", { status: upstream.status });
+      try { await refund(); } catch { diagnostics("refund", { reason: "storage_unavailable" }); }
+      keepalive?.stop();
+      if (!res.headersSent) {
+        res.setHeader("x-klyapi-error-source", "upstream");
+        await writeUpstreamResponse(upstream, res);
+      } else {
+        const failure = { error: { type: "upstream_error", code: "upstream_http_error", message: "Provider returned an error. Retry later.", upstream_status: upstream.status } };
+        if (!clientStream) res.end(JSON.stringify(failure));
+        else res.end(format === "messages" ? `event: error\ndata: ${JSON.stringify({ type: "error", ...failure })}\n\n` : `data: ${JSON.stringify(failure)}\n\n`);
+        await upstream.body?.cancel().catch(() => {});
+      }
     } else if (req.method === "GET") {
       await writeUpstreamResponse(upstream, res);
     } else if (clientStream) {
+      phase = "stream";
       const adapter = format === "chat" ? createChatStream("gpt-6.1-sol", { includeUsage: clientPayload.stream_options?.include_usage === true })
         : format === "messages" ? createMessagesStream("gpt-6.1-sol") : null;
       await streamResponse(upstream, res, format, adapter);
     } else {
+      phase = "collect";
       const response = await collectResponse(upstream);
+      keepalive?.stop();
       const result = format === "chat" ? chatCompletionFromResponse(response, "gpt-6.1-sol")
         : format === "messages" ? messageFromResponse(response, "gpt-6.1-sol") : response;
-      res.statusCode = 200;
-      res.setHeader("content-type", "application/json; charset=utf-8");
-      res.setHeader("cache-control", "no-store");
+      if (!res.headersSent) {
+        res.statusCode = 200;
+        res.setHeader("content-type", "application/json; charset=utf-8");
+        res.setHeader("cache-control", "no-store");
+      }
       res.end(JSON.stringify(result));
     }
   } catch (error) {
-    try { await refund(); } catch { /* Reserved requests expire at the daily reset. */ }
-    if (!res.destroyed && !res.headersSent) sendJson(res, 502, "Upstream request failed");
+    keepalive?.stop();
+    diagnostics(phase, { reason: controller.signal.aborted ? "aborted" : ["invalid_event", "incomplete_stream", "upstream_generation_failed"].includes(error.code) ? error.code : "upstream_request_failed" });
+    try { await refund(); } catch { diagnostics("refund", { reason: "storage_unavailable" }); }
+    if (!res.destroyed && !res.headersSent) {
+      res.setHeader("x-klyapi-error-source", "upstream_transport");
+      sendJson(res, 502, "Upstream request failed");
+    }
     else if (!res.destroyed) {
-      const failure = { error: { type: "api_error", message: "Upstream generation failed" } };
-      res.end(format === "messages" ? `event: error\ndata: ${JSON.stringify({ type: "error", ...failure })}\n\n`
-        : `data: ${JSON.stringify(failure)}\n\n`);
+      const failure = { error: { type: "api_error", message: "Upstream generation failed", code: "upstream_generation_failed" } };
+      res.end(!clientStream ? JSON.stringify(failure) : format === "messages" ? `event: error\ndata: ${JSON.stringify({ type: "error", ...failure })}\n\n` : `data: ${JSON.stringify(failure)}\n\n`);
     }
   } finally {
+    keepalive?.stop();
     clearTimeout(timeout);
     req.off?.("aborted", abortOnClientDisconnect);
     res.off?.("close", abortOnResponseClose);
