@@ -3,11 +3,13 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#0b0d13">
+    <meta name="theme-color" content="#10141b">
     <meta name="description" content="KlyAPI anahtarını oluştur, kullanımını takip et ve uygulamanı bağla.">
     <title>API Anahtarın · KlyAPI</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='17' fill='%237c8dff'/%3E%3Cpath d='M19 16v32m26-32L28 32l17 16' fill='none' stroke='%230b0d13' stroke-width='7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
     <link rel="stylesheet" href="/assets/key.css">
+    <link rel="stylesheet" href="/assets/workspace.css">
+    <script src="/assets/codex-config.js" defer></script>
     <script src="/assets/key.js" defer></script>
   </head>
   <body class="auth-pending">
@@ -28,6 +30,11 @@
       <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3m2-16a3 3 0 0 1 0 6m1 3a5 5 0 0 1 3 4v3"/></symbol>
       <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="3"/><path d="M7 10V7a5 5 0 0 1 10 0v3m-5 5v2"/></symbol>
       <symbol id="i-logout" viewBox="0 0 24 24"><path d="M10 4H4v16h6m4-13 5 5-5 5m-6-5h12"/></symbol>
+      <symbol id="i-desktop" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8m-4-4v4M9 7l-3 3 3 3m6-6 3 3-3 3"/></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></symbol>
+      <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a17 17 0 0 1 0 18 17 17 0 0 1 0-18Z"/></symbol>
+      <symbol id="i-tool" viewBox="0 0 24 24"><path d="m7 3-4 4 5 5-4 5 3 4 6-6 5 5 3-3-5-5 5-5-4-4-5 5-5-5Z"/></symbol>
+      <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 5-5 4 4 3-3 6 6"/></symbol>
     </svg>
 
     <aside class="sidebar" aria-label="Konsol menüsü">
@@ -35,10 +42,10 @@
       <span class="sidebar-caption">GELİŞTİRİCİ</span>
       <nav>
         <button class="nav-link current" id="nav-overview" type="button"><svg><use href="#i-key"/></svg><span>Genel bakış</span><span class="nav-indicator"></span></button>
-        <a class="nav-link" id="nav-start" href="#baslarken"><svg><use href="#i-code"/></svg><span>Bağlantı bilgileri</span><span class="nav-shortcut">↗</span></a>
+        <a class="nav-link" id="nav-start" href="#codex-setup"><svg><use href="#i-desktop"/></svg><span>Kurulum rehberi</span><span class="nav-shortcut">↗</span></a>
         <button class="nav-link" id="nav-users" type="button" hidden><svg><use href="#i-users"/></svg><span>Kullanıcılar</span></button>
       </nav>
-      <div class="sidebar-note"><span class="small-orb"></span><div><strong>Kontrol sende.</strong><p>Anahtarların ve API erişimin tek bir yerde.</p></div></div>
+      <div class="sidebar-note"><span class="sidebar-note-icon"><svg><use href="#i-desktop"/></svg></span><div><strong>Codex’e hazır</strong><p>Anahtarını oluştur, yapılandırmanı indir.</p><a href="#codex-setup" id="sidebar-setup-link">Kuruluma git <span>↗</span></a></div></div>
       <div class="workspace"><span class="workspace-avatar" id="sidebar-avatar">K</span><div><strong id="sidebar-user">Hesabım</strong><span id="sidebar-role">Kullanıcı</span></div></div>
     </aside>
 
@@ -47,16 +54,16 @@
       <main>
         <div id="overview-view">
         <section class="page-heading" aria-labelledby="page-title">
-          <div><span class="eyebrow">API KONSOLU</span><h1 id="page-title">Çalışma alanın<span>.</span></h1><p>Anahtarını yönet, kullanımını takip et ve uygulamanı bağla.</p></div>
-          <div class="heading-graphic" aria-hidden="true"><span class="graphic-grid"></span><svg><use href="#i-key"/></svg><span class="graphic-spark spark-one">+</span><span class="graphic-spark spark-two">+</span></div>
+          <div><span class="eyebrow"><span class="eyebrow-line"></span>GELİŞTİRİCİ KONSOLU</span><h1 id="page-title">Çalışma alanın<span>.</span></h1><p>Anahtarların, kullanımın ve bağlantı ayarların. Her şey burada.</p></div>
+          <a class="button subtle heading-setup" href="#codex-setup"><svg><use href="#i-desktop"/></svg>Codex’i bağla<svg class="button-arrow"><use href="#i-arrow"/></svg></a>
         </section>
 
         <section class="service-notice" id="service-notice" aria-label="Hizmet durumu"><span class="notice-icon"><svg><use href="#i-info"/></svg></span><div><strong id="service-title">Model erişimi kontrol ediliyor</strong><p id="service-message">Güncel hizmet bilgisi yükleniyor.</p></div><span class="notice-status" id="service-tag">Kontrol ediliyor</span></section>
 
         <div class="stat-grid" aria-label="Kullanım özeti">
           <article class="stat-card"><div class="stat-label">Bugünkü kullanım<svg><use href="#i-grid"/></svg></div><div class="stat-value"><span id="usage-count">—</span><span class="stat-denominator"> / <span id="daily-limit">—</span></span><span class="stat-unit">istek</span></div><progress class="usage-track" id="usage-progress" aria-label="Günlük kullanılan istekler" max="50" value="0"></progress><span class="stat-foot" id="remaining-label">Kullanım bilgileri yükleniyor</span></article>
-          <article class="stat-card"><div class="stat-label">Hız sınırı<svg><use href="#i-bolt"/></svg></div><div class="stat-value"><span id="minute-limit">5</span><span class="stat-unit">istek / dakika</span></div><span class="stat-foot spaced-foot">Anahtarına özel kullanım sınırı</span></article>
-          <article class="stat-card model-card"><div class="stat-label">Kullanılabilir model<svg><use href="#i-code"/></svg></div><div class="model-value"><span class="model-glyph">G</span><span id="model-name">gpt-6.1-sol</span></div><span class="stat-foot spaced-foot"><span class="model-dot"></span>Responses API</span></article>
+          <article class="stat-card"><div class="stat-label">Hız sınırı<svg><use href="#i-bolt"/></svg></div><div class="stat-value"><span id="minute-limit">—</span><span class="stat-unit">istek / dakika</span></div><span class="stat-foot spaced-foot">Hesabına tanımlanan sınır</span></article>
+          <article class="stat-card model-card"><div class="stat-label">Model<svg><use href="#i-code"/></svg></div><div class="model-value"><span class="model-glyph">G</span><span id="model-name">gpt-6.1-sol</span></div><span class="stat-foot spaced-foot"><span class="model-dot"></span>OpenAI ve Anthropic uyumlu</span></article>
         </div>
 
         <section class="panel key-panel" id="anahtar" aria-labelledby="key-heading">
@@ -81,7 +88,15 @@
         </section>
 
         <section class="quickstart" id="baslarken" aria-labelledby="start-heading">
-          <div class="section-heading"><div><span class="eyebrow">DAKİKALAR İÇİNDE BAĞLAN</span><h2 id="start-heading">İlk isteğini hazırla</h2></div><span class="step-count">01 — 02</span></div>
+          <div class="section-heading"><div><span class="eyebrow">KURULUM REHBERİ</span><h2 id="start-heading">Bir sonraki adım: bağlan<span>.</span></h2><p>Anahtarını Codex’te veya kendi uygulamanda kullan.</p></div><span class="section-index">02 <span>/ BAĞLANTI</span></span></div>
+          <article class="codex-setup-card panel" id="codex-setup" aria-labelledby="codex-heading">
+            <div class="codex-intro"><span class="setup-product-icon"><svg><use href="#i-desktop"/></svg></span><div class="codex-product-label">CODEX DESKTOP & CLI</div><h3 id="codex-heading">Kopyala. Ekle.<br> Geliştirmeye başla.</h3><p>KlyAPI bağlantısını Codex’in kullanıcı düzeyindeki <code>config.toml</code> dosyasına ekle.</p><ol class="setup-steps"><li><span>1</span><div><strong>Yapılandırmayı aç</strong><p>Aşağıdaki konumdan kendi <code>config.toml</code> dosyanı aç; proje ayarlarını kullanma.</p></div></li><li><span>2</span><div><strong>KlyAPI ayarlarını ekle</strong><p>Örnekteki <code>KLYAPI_API_ANAHTARIN</code> yerine kişisel <code>kly_…</code> anahtarını koy.</p></div></li><li><span>3</span><div><strong>Codex’i yeniden aç</strong><p>Yeni bir sohbet açıp <code>gpt-6.1-sol</code> ile devam et.</p></div></li></ol><details class="config-location"><summary>Dosya nerede?</summary><div><span>Windows</span><code>%USERPROFILE%\.codex\config.toml</code><span>macOS / Linux</span><code>~/.codex/config.toml</code></div></details><a class="setup-docs-link" href="https://learn.chatgpt.com/docs/config-file/config-advanced" target="_blank" rel="noopener noreferrer">Resmi yapılandırma rehberi <span>↗</span></a></div>
+            <div class="codex-code-area"><div class="setup-code-heading"><div><span class="code-file-icon"><svg><use href="#i-code"/></svg></span><span>config.toml<small>Codex yapılandırması</small></span></div><span class="setup-language">TOML</span></div><pre class="codex-code"><code id="codex-config"># KlyAPI yapılandırması yükleniyor…</code></pre><div class="config-save-note"><svg><use href="#i-info"/></svg><p>Mevcut ayarlarını koru; aynı TOML bölümünü iki kez ekleme. Dosya kişisel anahtarını içerir; herkese açık paylaşma.</p></div><div class="codex-actions"><button class="button primary" type="button" id="copy-codex-config"><svg><use href="#i-copy"/></svg>Yapılandırmayı kopyala</button><button class="button subtle" type="button" id="download-codex-config"><svg><use href="#i-download"/></svg>İndir</button></div></div>
+          </article>
+          <div class="tools-heading"><h3>Araç desteği</h3><span>Doğrulanan yetenekler</span></div>
+          <div class="tool-support-grid" aria-label="Model araç desteği"><article class="tool-support-card"><span class="tool-icon"><svg><use href="#i-globe"/></svg></span><span class="tool-state supported"><span></span>Doğrulandı</span><h4>Web araması</h4><p>Güncel kaynaklara erişim ve bağlantılı yanıtlar.</p></article><article class="tool-support-card"><span class="tool-icon"><svg><use href="#i-tool"/></svg></span><span class="tool-state supported"><span></span>Doğrulandı</span><h4>Fonksiyon çağrıları</h4><p>Kendi araçlarını modele bağla, sonuçları geri gönder.</p></article><article class="tool-support-card"><span class="tool-icon"><svg><use href="#i-eye"/></svg></span><span class="tool-state supported"><span></span>Doğrulandı</span><h4>Görsel anlama</h4><p>Gönderdiğin görselleri inceleyebilir ve yorumlayabilir.</p></article><article class="tool-support-card unavailable"><span class="tool-icon"><svg><use href="#i-image"/></svg></span><span class="tool-state"><span></span>Kullanılamıyor</span><h4>Görsel üretimi</h4><p>Sağlayıcı bu model grubu için erişim vermiyor.</p></article></div>
+          <p class="tool-scope-note">Web araması Codex ve Responses API ile kullanılabilir. Özel fonksiyonları bağladığın uygulama çalıştırır.</p>
+          <div class="integration-heading"><span>ÖZEL UYGULAMALAR</span><h3>Doğrudan API bağlantısı</h3></div>
           <div class="connection-grid">
             <article class="panel connection-panel"><span class="step-label"><span>01</span>İstemcini ayarla</span><p class="connection-description">OpenAI uyumlu uygulamanda aşağıdaki bilgileri kullan. <strong>Chat Completions</strong> veya <strong>Responses API</strong> kullanabilirsin.</p><label class="config-label" for="base-url">Base URL</label><div class="config-field"><input id="base-url" type="text" readonly value="https://klyapi.vercel.app/api/v1" spellcheck="false"><button class="icon-button" type="button" data-copy-target="base-url" title="Base URL’yi kopyala" aria-label="Base URL’yi kopyala"><svg><use href="#i-copy"/></svg></button></div><label class="config-label" for="model-id">Model</label><div class="config-field"><input id="model-id" type="text" readonly value="gpt-6.1-sol" spellcheck="false"><button class="icon-button" type="button" data-copy-target="model-id" title="Modeli kopyala" aria-label="Modeli kopyala"><svg><use href="#i-copy"/></svg></button></div><p class="connection-note">API key alanına yukarıda oluşturduğun anahtarı gir.</p></article>
             <article class="panel code-panel"><div class="code-heading"><span class="step-label"><span>02</span>Bir istek gönder</span><button class="code-copy" type="button" id="copy-example"><svg><use href="#i-copy"/></svg>Kopyala</button></div><div class="code-language"><span></span>cURL<span class="file-name">ilk-istek.sh</span></div><pre><code id="code-example">curl https://klyapi.vercel.app/api/v1/responses \

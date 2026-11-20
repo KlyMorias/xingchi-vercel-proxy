@@ -45,6 +45,8 @@
   function updateExample() {
     const key = state.secret && state.revealed ? state.secret : "YOUR_KEY";
     byId("code-example").textContent = exampleFor(key);
+    if (byId("codex-config")) byId("codex-config").textContent = window.KlyCodexConfig.buildConfig(
+      state.secret && state.revealed ? state.secret : undefined);
   }
 
   function exampleFor(key) {
@@ -138,6 +140,9 @@
       ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
     });
     if (response.status === 401 && url !== "/api/auth") {
+      state.secret = null;
+      state.revealed = false;
+      updateExample();
       window.location.replace("/login");
       throw Object.assign(new Error("Oturumun sona erdi. Yeniden giriş yap."), { status: 401 });
     }
@@ -212,6 +217,7 @@
       state.key = null;
       state.secret = null;
       state.revealed = false;
+      updateExample();
       if (rotate) {
         const data = await request("POST");
         state.secret = data.api_key || null;
@@ -236,6 +242,36 @@
       toast(successMessage);
     } catch {
       announce("Otomatik kopyalama kullanılamadı. Anahtarı veya alanı gösterip elle seçerek kopyalayabilirsin.");
+    }
+  }
+
+  function codexConfig() {
+    return window.KlyCodexConfig.buildConfig(state.secret || undefined);
+  }
+
+  function configNotice(action) {
+    return state.secret ? `Codex ayarları ${action}` : `Örnek ayarlar ${action}. KLYAPI_API_ANAHTARIN yerine kendi anahtarını ekle.`;
+  }
+
+  const downloadUrls = new Set();
+  function downloadCodexConfig() {
+    let url;
+    let link;
+    try {
+      url = URL.createObjectURL(new Blob([codexConfig()], { type: "application/toml;charset=utf-8" }));
+      downloadUrls.add(url);
+      link = document.createElement("a");
+      link.href = url;
+      link.download = "config.toml";
+      link.hidden = true;
+      document.body.append(link);
+      link.click();
+      toast(configNotice("indirildi"));
+    } catch {
+      announce("Ayar dosyası indirilemedi. Kopyala düğmesini kullanıp config.toml dosyana ekleyebilirsin.");
+    } finally {
+      link?.remove();
+      if (url) setTimeout(() => { URL.revokeObjectURL(url); downloadUrls.delete(url); }, 1000);
     }
   }
 
@@ -411,6 +447,8 @@
     try {
       await api("/api/auth", "POST", { action: "logout" });
       state.secret = null;
+      state.revealed = false;
+      updateExample();
       window.location.replace("/login");
     } catch (error) { announce(error.message); byId("logout").disabled = false; }
   }
@@ -435,8 +473,12 @@
   byId("reveal-key").addEventListener("click", () => { state.revealed = !state.revealed; renderSecret(); });
   byId("copy-key").addEventListener("click", () => { if (state.secret) copy(state.secret, "API anahtarın kopyalandı"); });
   byId("copy-example").addEventListener("click", () => copy(exampleFor(state.secret || "YOUR_KEY"), "İstek örneği kopyalandı"));
+  byId("copy-codex-config")?.addEventListener("click", () => copy(codexConfig(), configNotice("kopyalandı")));
+  byId("download-codex-config")?.addEventListener("click", downloadCodexConfig);
   document.querySelectorAll("[data-copy-target]").forEach((button) => button.addEventListener("click", () => copy(byId(button.dataset.copyTarget).value, "Kopyalandı")));
   window.addEventListener("pagehide", () => {
+    for (const url of downloadUrls) URL.revokeObjectURL(url);
+    downloadUrls.clear();
     state.secret = null;
     state.revealed = false;
     if (state.key) renderSecret();

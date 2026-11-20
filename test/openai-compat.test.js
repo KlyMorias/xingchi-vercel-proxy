@@ -52,6 +52,65 @@ test("preserves function call IDs and tool results across a multi-turn request",
   assert.deepEqual(converted.tool_choice, { type: "function", name: "weather" });
 });
 
+test("replays the gateway's own Chat tool response with its null refusal and tool result", () => {
+  const completion = chatCompletionFromResponse({ ...textResponse, output: [
+    { type: "function_call", id: "fc_answer", call_id: "call_answer", name: "answer", arguments: "{}" },
+  ] });
+  const message = completion.choices[0].message;
+  assert.equal(message.refusal, null);
+  assert.equal(message.content, null);
+  const converted = chatRequestToResponses({ ...base, messages: [
+    ...base.messages, message, { role: "tool", tool_call_id: "call_answer", content: "42" },
+  ] });
+  assert.deepEqual(converted.input.slice(1), [
+    { type: "function_call", call_id: "call_answer", name: "answer", arguments: "{}" },
+    { type: "function_call_output", call_id: "call_answer", output: "42" },
+  ]);
+});
+
+test("replays assistant refusal strings as assistant output while retaining text and tool calls", () => {
+  const completion = chatCompletionFromResponse({ ...textResponse, output: [
+    { type: "message", role: "assistant", content: [
+      { type: "output_text", text: "Some context.", annotations: [] },
+      { type: "refusal", refusal: "Cannot help with that part." },
+    ] },
+    { type: "function_call", call_id: "call_safe", name: "safe_alternative", arguments: "{}" },
+  ] });
+  const converted = chatRequestToResponses({ ...base, messages: [...base.messages, completion.choices[0].message] });
+  assert.deepEqual(converted.input[1], { type: "message", role: "assistant",
+    content: [{ type: "input_text", text: "Some context." }] });
+  const refusal = converted.input[2];
+  assert.match(refusal.id, /^msg_[a-f0-9]{32}$/);
+  assert.deepEqual({ ...refusal, id: "replayed_message" }, { type: "message", id: "replayed_message",
+    role: "assistant", status: "completed", content: [{ type: "refusal", refusal: "Cannot help with that part." }] });
+  assert.deepEqual(converted.input[3], { type: "function_call", call_id: "call_safe", name: "safe_alternative", arguments: "{}" });
+  const refusalOnly = chatRequestToResponses({ ...base, messages: [
+    { role: "assistant", content: null, refusal: "Cannot help." },
+  ] });
+  assert.deepEqual(refusalOnly.input[0].content, [{ type: "refusal", refusal: "Cannot help." }]);
+  const normal = chatRequestToResponses({ ...base, messages: [{ role: "assistant", content: "Hello", refusal: null }] });
+  assert.equal(normal.input.length, 1);
+  assert.deepEqual(normal.input[0].content, [{ type: "input_text", text: "Hello" }]);
+});
+
+test("rejects refusal on other roles and invalid assistant refusal types with 400", () => {
+  for (const role of ["user", "system", "developer", "tool"]) {
+    for (const refusal of [null, "Cannot help."]) {
+      assert.throws(() => chatRequestToResponses({ ...base, messages: [
+        { role, content: "text", refusal, ...(role === "tool" ? { tool_call_id: "call_1" } : {}) },
+      ] }), { status: 400, param: "messages[0].refusal" });
+    }
+  }
+  for (const refusal of [false, 1, [], {}, { type: "refusal", refusal: "wrong" }]) {
+    assert.throws(() => chatRequestToResponses({ ...base, messages: [
+      { role: "assistant", content: "text", refusal },
+    ] }), { status: 400, param: "messages[0].refusal" });
+  }
+  assert.throws(() => chatRequestToResponses({ ...base, messages: [
+    { role: "assistant", content: null, refusal: null },
+  ] }), { status: 400 });
+});
+
 test("flattens structured JSON format without silently changing strictness", () => {
   const schema = { type: "object", properties: { answer: { type: "string" } }, required: ["answer"], additionalProperties: false };
   const converted = chatRequestToResponses({ ...base, response_format: {
