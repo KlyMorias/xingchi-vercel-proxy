@@ -300,14 +300,16 @@
   function selectView(view) {
     const users = view === "users" && state.user?.role === "admin";
     const models = view === "models";
-    byId("overview-view").hidden = users || models;
+    const setup = view === "setup";
+    byId("overview-view").hidden = users || models || setup;
     byId("models-view").hidden = !models;
     byId("users-view").hidden = !users;
-    byId("baslarken").hidden = users || models;
-    byId("nav-overview").classList.toggle("current", !users && !models);
+    byId("setup-view").hidden = !setup;
+    byId("nav-overview").classList.toggle("current", !users && !models && !setup);
     byId("nav-models").classList.toggle("current", models);
+    byId("nav-start").classList.toggle("current", setup);
     byId("nav-users").classList.toggle("current", users);
-    byId("breadcrumb-page").textContent = users ? "Kullanıcılar" : models ? "Modeller" : "Genel bakış";
+    byId("breadcrumb-page").textContent = users ? "Kullanıcılar" : models ? "Modeller" : setup ? "Kurulum" : "Genel bakış";
     if (users) loadUsers();
   }
 
@@ -323,6 +325,7 @@
       byId("nav-users").hidden = data.user.role !== "admin";
       byId("auth-cover").hidden = true;
       document.body.classList.remove("auth-pending");
+      if (window.location.hash === "#codex-setup") selectView("setup");
       fetch("/api", { cache: "no-store" }).then((response) => response.ok ? response.json() : null)
         .then((service) => { if (service) renderService(service); }).catch(() => {});
       refresh();
@@ -480,7 +483,14 @@
   byId("nav-overview").addEventListener("click", () => selectView("overview"));
   byId("nav-models").addEventListener("click", () => selectView("models"));
   byId("nav-users").addEventListener("click", () => selectView("users"));
-  document.querySelectorAll('a[href="#codex-setup"]').forEach((link) => link.addEventListener("click", () => selectView("overview")));
+  byId("nav-start").addEventListener("click", (event) => { event.preventDefault(); selectView("setup"); });
+  byId("aside-model-link").addEventListener("click", () => selectView("models"));
+  byId("footer-key-link").addEventListener("click", (event) => {
+    event.preventDefault();
+    selectView("overview");
+    requestAnimationFrame(() => byId("anahtar").scrollIntoView({ behavior: "smooth", block: "start" }));
+  });
+  document.querySelectorAll('a[href="#codex-setup"]').forEach((link) => link.addEventListener("click", (event) => { event.preventDefault(); selectView("setup"); }));
   byId("refresh-users").addEventListener("click", loadUsers);
   byId("add-user").addEventListener("click", () => openUserDialog("create"));
   byId("user-form").addEventListener("submit", saveUser);

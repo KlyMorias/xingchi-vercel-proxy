@@ -3,13 +3,14 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#10141b">
+    <meta name="theme-color" content="#0b0d10">
     <meta name="description" content="KlyAPI anahtarını oluştur, kullanımını takip et ve uygulamanı bağla.">
     <title>API Anahtarın · KlyAPI</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='17' fill='%237c8dff'/%3E%3Cpath d='M19 16v32m26-32L28 32l17 16' fill='none' stroke='%230b0d13' stroke-width='7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
     <link rel="stylesheet" href="/assets/key.css">
     <link rel="stylesheet" href="/assets/workspace.css">
-    <link rel="stylesheet" href="/assets/console-theme.css">
+    <link rel="stylesheet" href="/assets/console-theme.css?v=3">
+    <link rel="stylesheet" href="/assets/dashboard.css?v=1">
     <script src="/assets/codex-config.js" defer></script>
     <script src="/assets/key.js" defer></script>
   </head>
@@ -44,7 +45,7 @@
       <nav>
         <button class="nav-link current" id="nav-overview" type="button"><svg><use href="#i-key"/></svg><span>Genel bakış</span><span class="nav-indicator"></span></button>
         <button class="nav-link" id="nav-models" type="button"><svg><use href="#i-code"/></svg><span>Modeller</span></button>
-        <a class="nav-link" id="nav-start" href="#codex-setup"><svg><use href="#i-desktop"/></svg><span>Kurulum rehberi</span><span class="nav-shortcut">↗</span></a>
+        <a class="nav-link" id="nav-start" href="#codex-setup"><svg><use href="#i-desktop"/></svg><span>Kurulum</span><span class="nav-shortcut">↗</span></a>
         <button class="nav-link" id="nav-users" type="button" hidden><svg><use href="#i-users"/></svg><span>Kullanıcılar</span></button>
       </nav>
       <div class="sidebar-note"><span class="sidebar-note-icon"><svg><use href="#i-desktop"/></svg></span><div><strong>Codex’e hazır</strong><p>Anahtarını oluştur, yapılandırmanı indir.</p><a href="#codex-setup" id="sidebar-setup-link">Kuruluma git <span>↗</span></a></div></div>
@@ -56,19 +57,12 @@
       <main>
         <div id="overview-view">
         <section class="page-heading" aria-labelledby="page-title">
-          <div><span class="eyebrow"><span class="eyebrow-line"></span>GELİŞTİRİCİ KONSOLU</span><h1 id="page-title">Çalışma alanın<span>.</span></h1><p>Anahtarların, kullanımın ve bağlantı ayarların. Her şey burada.</p></div>
+          <div><span class="eyebrow"><span class="eyebrow-line"></span>KLYAPI · GELİŞTİRİCİ PANELİ</span><h1 id="page-title">API anahtarın<span>.</span></h1><p>Bağlantını yönet, kota kullanımını tek bakışta gör.</p></div>
           <a class="button subtle heading-setup" href="#codex-setup"><svg><use href="#i-desktop"/></svg>Codex’i bağla<svg class="button-arrow"><use href="#i-arrow"/></svg></a>
         </section>
 
-        <section class="service-notice" id="service-notice" aria-label="Hizmet durumu"><span class="notice-icon"><svg><use href="#i-info"/></svg></span><div><strong id="service-title">Model erişimi kontrol ediliyor</strong><p id="service-message">Güncel hizmet bilgisi yükleniyor.</p></div><span class="notice-status" id="service-tag">Kontrol ediliyor</span></section>
-
-        <div class="stat-grid" aria-label="Kullanım özeti">
-          <article class="stat-card"><div class="stat-label">Bugünkü kullanım<svg><use href="#i-grid"/></svg></div><div class="stat-value"><span id="usage-count">—</span><span class="stat-denominator"> / <span id="daily-limit">—</span></span><span class="stat-unit">istek</span></div><progress class="usage-track" id="usage-progress" aria-label="Günlük kullanılan istekler" max="50" value="0"></progress><span class="stat-foot" id="remaining-label">Kullanım bilgileri yükleniyor</span></article>
-          <article class="stat-card"><div class="stat-label">Hız sınırı<svg><use href="#i-bolt"/></svg></div><div class="stat-value"><span id="minute-limit">—</span><span class="stat-unit">istek / dakika</span></div><span class="stat-foot spaced-foot">Anlık istek hızı</span></article>
-          <article class="stat-card quota-card"><div class="stat-label">Bu saat<svg><use href="#i-bolt"/></svg></div><div class="stat-value"><span id="hourly-usage-count">—</span><span class="stat-denominator"> / <span id="hourly-limit">—</span></span><span class="stat-unit">istek</span></div><progress class="usage-track" id="hourly-progress" aria-label="Saatlik kullanılan istekler" max="20" value="0"></progress><span class="stat-foot" id="hourly-remaining-label">Kullanım bilgileri yükleniyor</span></article>
-          <article class="stat-card quota-card"><div class="stat-label">Bu hafta<svg><use href="#i-grid"/></svg></div><div class="stat-value"><span id="weekly-usage-count">—</span><span class="stat-denominator"> / <span id="weekly-limit">—</span></span><span class="stat-unit">istek</span></div><progress class="usage-track" id="weekly-progress" aria-label="Haftalık kullanılan istekler" max="200" value="0"></progress><span class="stat-foot" id="weekly-remaining-label">Kullanım bilgileri yükleniyor</span></article>
-        </div>
-
+        <div class="dashboard-grid">
+          <div class="dashboard-key-column">
         <section class="panel key-panel" id="anahtar" aria-labelledby="key-heading">
           <div class="panel-heading"><div class="heading-with-icon"><span class="panel-icon"><svg><use href="#i-key"/></svg></span><div><h2 id="key-heading">API anahtarın</h2><p>Uygulamalarında kullanacağın kişisel erişim anahtarı.</p></div></div><span class="outline-badge" id="key-badge">Yükleniyor</span></div>
           <div class="message-box" id="message-box" role="status" aria-live="polite" hidden></div>
@@ -83,6 +77,22 @@
           </div>
           <div class="panel-footer"><svg><use href="#i-lock"/></svg><span>Anahtarın hesabına bağlıdır. Yalnızca güvendiğin uygulamalarda kullan.</span></div>
         </section>
+          </div>
+          <aside class="dashboard-aside" aria-label="Kullanım ve hizmet bilgileri">
+            <section class="service-notice api-state-strip" id="service-notice" aria-label="Hizmet durumu"><span class="api-state-pulse"></span><div><strong id="service-title">Model erişimi kontrol ediliyor</strong><p id="service-message">Güncel hizmet bilgisi yükleniyor.</p></div><span class="notice-status" id="service-tag">Kontrol ediliyor</span></section>
+            <section class="usage-panel" aria-labelledby="usage-heading">
+              <div class="usage-panel-heading"><div><span class="eyebrow">HESAP KULLANIMI</span><h2 id="usage-heading">Limitlerin</h2></div><span class="usage-live"><span></span>Canlı</span></div>
+              <div class="usage-rows">
+                <article class="usage-row"><div class="usage-row-heading"><span>Bugün</span><strong><span id="usage-count">—</span><small> / <span id="daily-limit">—</span> istek</small></strong></div><progress class="usage-track" id="usage-progress" aria-label="Günlük kullanılan istekler" max="50" value="0"></progress><span class="stat-foot" id="remaining-label">Kullanım bilgileri yükleniyor</span></article>
+                <article class="usage-row"><div class="usage-row-heading"><span>Bu saat</span><strong><span id="hourly-usage-count">—</span><small> / <span id="hourly-limit">—</span> istek</small></strong></div><progress class="usage-track" id="hourly-progress" aria-label="Saatlik kullanılan istekler" max="20" value="0"></progress><span class="stat-foot" id="hourly-remaining-label">Kullanım bilgileri yükleniyor</span></article>
+                <article class="usage-row"><div class="usage-row-heading"><span>Bu hafta</span><strong><span id="weekly-usage-count">—</span><small> / <span id="weekly-limit">—</span> istek</small></strong></div><progress class="usage-track" id="weekly-progress" aria-label="Haftalık kullanılan istekler" max="200" value="0"></progress><span class="stat-foot" id="weekly-remaining-label">Kullanım bilgileri yükleniyor</span></article>
+              </div>
+              <div class="speed-limit"><span class="speed-limit-icon"><svg><use href="#i-bolt"/></svg></span><span><small>Anlık hız sınırı</small><strong><span id="minute-limit">—</span> istek / dakika</strong></span></div>
+              <div class="usage-reset">Saatlik ve günlük limitler UTC’ye göre yenilenir. Haftalık sayaç pazartesi sıfırlanır.</div>
+            </section>
+            <section class="model-status-card"><span class="model-status-dot"></span><span><small>Aktif model</small><strong>gpt-6.1-sol</strong></span><button type="button" id="aside-model-link">Model bilgisi <span>↗</span></button></section>
+          </aside>
+        </div>
         </div>
         <section id="models-view" hidden aria-labelledby="models-title">
           <div class="page-heading"><div><span class="eyebrow">MODEL KATALOĞU</span><h1 id="models-title">Modeller<span>.</span></h1><p>Hesabında şu anda kullanılabilen model ve bağlantı bilgileri.</p></div></div>
@@ -98,6 +108,7 @@
           <div class="panel users-panel"><div class="panel-heading"><div><h2>Erişim yönetimi</h2><p>Kotalar her kullanıcının API anahtarına uygulanır.</p></div><button class="button subtle" type="button" id="refresh-users"><svg><use href="#i-refresh"/></svg>Yenile</button></div><div id="users-message" class="message-box" role="alert" hidden></div><div class="key-loading" id="users-loading"><span class="spinner"></span>Kullanıcılar yükleniyor…</div><div class="user-list" id="user-list"></div><div class="panel-footer"><svg><use href="#i-info"/></svg><span>Erişimi kapatılan kullanıcılar giriş yapamaz ve API anahtarlarını kullanamaz.</span></div></div>
         </section>
 
+        <section id="setup-view" hidden aria-labelledby="start-heading">
         <section class="quickstart" id="baslarken" aria-labelledby="start-heading">
           <div class="section-heading"><div><span class="eyebrow">KURULUM REHBERİ</span><h2 id="start-heading">Bir sonraki adım: bağlan<span>.</span></h2><p>Anahtarını Codex’te veya kendi uygulamanda kullan.</p></div><span class="section-index">02 <span>/ BAĞLANTI</span></span></div>
           <article class="codex-setup-card panel" id="codex-setup" aria-labelledby="codex-heading">
@@ -117,7 +128,8 @@
   }'</code></pre><div class="code-bottom"><span class="code-dot"></span><span>Örnek, kendi anahtarınla otomatik güncellenir.</span></div></article>
           </div>
         </section>
-        <footer class="page-footer"><a class="footer-brand" href="/key">KlyAPI<span>.</span></a><span>Bir fikirle başlar.</span><a href="#anahtar">Anahtarıma dön <span>↑</span></a></footer>
+        </section>
+        <footer class="page-footer"><a class="footer-brand" href="/key">KlyAPI<span>.</span></a><span>Bir fikirle başlar.</span><a href="#anahtar" id="footer-key-link">Anahtarıma dön <span>↑</span></a></footer>
       </main>
     </div>
 <dialog class="modal" id="user-dialog" aria-labelledby="user-dialog-title"><form id="user-form"><div class="modal-heading"><div><span class="eyebrow">KULLANICI YÖNETİMİ</span><h2 id="user-dialog-title">Kullanıcı ekle</h2></div><button class="dialog-close" type="button" data-close-dialog="user-dialog" aria-label="Kapat">×</button></div><p class="modal-description" id="user-dialog-description">Yeni kullanıcıya bir kullanıcı adı ve şifre belirle.</p><div class="form-message" id="user-form-message" role="alert" hidden></div><label class="field-label" for="user-username">Kullanıcı adı</label><input class="form-input" id="user-username" name="username" autocomplete="off" minlength="3" maxlength="32" pattern="[A-Za-z0-9_]+" required><div id="user-password-group"><label class="field-label" for="user-password">Şifre</label><input class="form-input" id="user-password" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="128"><p class="field-hint">En az 8 karakter. Şifreyi kullanıcıya güvenli bir kanaldan ilet.</p></div><div class="form-columns" id="user-quota-group"><div><label class="field-label" for="user-daily">Günlük istek</label><input class="form-input" id="user-daily" name="daily_limit" type="number" min="1" max="100000" required value="50"></div><div><label class="field-label" for="user-hourly">Saatlik istek</label><input class="form-input" id="user-hourly" name="hourly_limit" type="number" min="1" max="100000" required value="20"></div><div><label class="field-label" for="user-weekly">Haftalık istek</label><input class="form-input" id="user-weekly" name="weekly_limit" type="number" min="1" max="1000000" required value="200"></div><div><label class="field-label" for="user-minute">Dakikada istek</label><input class="form-input" id="user-minute" name="requests_per_minute" type="number" min="1" max="1000" required value="5"></div></div><div class="modal-actions"><button class="button subtle" type="button" data-close-dialog="user-dialog">Vazgeç</button><button class="button primary" id="save-user" type="submit">Kullanıcı oluştur</button></div></form></dialog>
