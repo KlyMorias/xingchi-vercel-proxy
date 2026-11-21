@@ -2,8 +2,18 @@
   "use strict";
 
   const byId = (id) => document.getElementById(id);
-  const state = { user: null, users: [], key: null, secret: null, revealed: false, busy: false, daily: 50, hourly: 20, weekly: 200, minute: 5, model: "gpt-6.1-sol", loaded: false, userMode: "create" };
+  const state = { user: null, users: [], key: null, secret: null, revealed: false, busy: false, daily: 50, hourly: 20, weekly: 200, minute: 5, model: "gpt-6.1-sol", loaded: false, userMode: "create", view: "overview", usersLoadedAt: 0, lastRefreshAt: 0, lastRefreshAttempt: 0, stale: false, clockOffset: 0, resets: {}, remaining: {} };
   let toastTimeout;
+  let refreshPromise;
+  let usersPromise;
+  let refreshTimer;
+  let countdownTimer;
+  let commandIndex = 0;
+  const AUTO_REFRESH_MS = 60000;
+  const USER_CACHE_MS = 30000;
+  const MODEL_NAMES = Object.freeze({ "gpt-6.1-sol": "GPT 6.1 Sol", "gpt-6-astra": "GPT 6 Astra" });
+  let modelCatalogSignature = "";
+  let modelCatalog = [];
 
   const formattedNumber = (number) => new Intl.NumberFormat("tr-TR").format(number);
   const safeNumber = (value, fallback) => Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : fallback;
@@ -46,7 +56,7 @@
     const key = state.secret && state.revealed ? state.secret : "YOUR_KEY";
     byId("code-example").textContent = exampleFor(key);
     if (byId("codex-config")) byId("codex-config").textContent = window.KlyCodexConfig.buildConfig(
-      state.secret && state.revealed ? state.secret : undefined);
+      state.secret && state.revealed ? state.secret : undefined, state.model);
   }
 
   function exampleFor(key) {
@@ -86,13 +96,85 @@
     byId("service-tag").textContent = available ? "Kullanılabilir" : "Sağlayıcı kısıtlaması";
   }
 
+  function renderModels(service) {
+    const offered = Array.isArray(service?.models) ? service.models : [{ id: service?.model || "gpt-6.1-sol" }];
+    const ids = [...new Set(offered.map((model) => model?.id).filter((id) => Object.hasOwn(MODEL_NAMES, id)))];
+    modelCatalog = ids.map((id) => {
+      const item = offered.find((model) => model?.id === id);
+      return { id, availability: item?.availability === "balance_required" ? "balance_required" : "configured", note: typeof item?.note === "string" ? item.note.slice(0, 300) : "" };
+    });
+    if (!ids.includes(state.model)) state.model = ids[0] || "gpt-6.1-sol";
+    const signature = JSON.stringify(modelCatalog);
+    if (modelCatalogSignature !== signature || !byId("model-catalog").dataset.loaded) {
+      modelCatalogSignature = signature;
+      const catalog = byId("model-catalog");
+      catalog.dataset.loaded = "true";
+      catalog.replaceChildren();
+      byId("setup-model").replaceChildren();
+      for (const id of ids) {
+        const item = modelCatalog.find((model) => model.id === id);
+        const needsBalance = item.availability === "balance_required";
+        const option = element("option", "", `${MODEL_NAMES[id]}${needsBalance ? " · Bakiye gerekli" : ""}`);
+        option.value = id;
+        byId("setup-model").append(option);
+        const card = element("article", "model-catalog-card panel");
+        const heading = element("div", "model-catalog-heading");
+        heading.append(element("span", "model-catalog-icon", "G"));
+        const identity = element("div");
+        identity.append(element("span", "model-status", "API kataloğu"), element("h2", "", MODEL_NAMES[id]), element("p", "", id));
+        heading.append(identity, element("span", `outline-badge ${needsBalance ? "warning" : "active"}`, needsBalance ? "Bakiye gerekli" : "Sunuluyor"));
+        const details = element("div", "model-catalog-meta");
+        for (const [label, value] of [["API yolu", "/api/v1/responses"], ["Uyumluluk", "Responses · Chat Completions"], ["Model kimliği", id]]) {
+          const item = element("div");
+          item.append(element("span", "", label), element("code", "", value));
+          details.append(item);
+        }
+        const use = element("button", "button subtle", "Bu modelle kur");
+        use.type = "button";
+        use.addEventListener("click", () => { setModel(id); selectView("setup"); });
+        const footer = element("div", "model-catalog-note");
+        footer.append(element("span", "", item.note || "Yanıt süreleri ve araç desteği sağlayıcıya bağlıdır."), use);
+        card.append(heading, details, footer);
+        catalog.append(card);
+      }
+      if (!ids.length) catalog.append(element("p", "users-empty", "Şu anda yapılandırılmış model bulunmuyor."));
+    }
+    byId("setup-model").disabled = !ids.length;
+    byId("setup-model").value = ids.includes(state.model) ? state.model : "";
+    byId("active-model-count").textContent = `${formattedNumber(ids.length)} model sunuluyor`;
+    byId("setup-selected-model").textContent = state.model;
+    byId("model-id").value = state.model;
+    updateModelNote();
+  }
+
+  function updateModelNote() {
+    const selected = modelCatalog.find((model) => model.id === state.model);
+    const needsBalance = selected?.availability === "balance_required";
+    byId("setup-model-note").textContent = needsBalance ? selected.note || "Bu model için sağlayıcı hesabında özel bakiye gerekiyor." : "Seçimin yapılandırma dosyasına ve istek örneklerine uygulanır.";
+    byId("setup-model-note").classList.toggle("warning", needsBalance);
+  }
+
+  function setModel(model) {
+    if (!Object.hasOwn(MODEL_NAMES, model) || ![...byId("setup-model").options].some((option) => option.value === model)) return;
+    state.model = model;
+    byId("setup-model").value = model;
+    byId("setup-selected-model").textContent = model;
+    byId("model-id").value = model;
+    updateModelNote();
+    updateExample();
+  }
+
   function render(data) {
+    if (!data.key || (state.key && state.key.prefix !== data.key.prefix)) {
+      state.secret = null;
+      state.revealed = false;
+    }
     state.key = data.key || null;
     state.daily = safeNumber(data.limits?.daily_requests ?? data.key?.daily_limit, 50);
     state.hourly = safeNumber(data.limits?.hourly_requests ?? data.key?.hourly_limit, 20);
     state.weekly = safeNumber(data.limits?.weekly_requests ?? data.key?.weekly_limit, 200);
     state.minute = safeNumber(data.limits?.requests_per_minute, 5);
-    state.model = typeof data.service?.model === "string" ? data.service.model : "gpt-6.1-sol";
+    renderModels(data.service);
     state.loaded = true;
     const usage = safeNumber(state.key?.used_today ?? data.usage?.used_today, 0);
     const remaining = safeNumber(state.key?.remaining_today ?? data.usage?.remaining_today, Math.max(0, state.daily - usage));
@@ -100,13 +182,18 @@
     const hourlyRemaining = safeNumber(data.usage?.remaining_this_hour ?? state.key?.remaining_this_hour, Math.max(0, state.hourly - hourlyUsage));
     const weeklyUsage = safeNumber(data.usage?.used_this_week ?? state.key?.used_this_week, 0);
     const weeklyRemaining = safeNumber(data.usage?.remaining_this_week ?? state.key?.remaining_this_week, Math.max(0, state.weekly - weeklyUsage));
+    const serverTime = Date.parse(data.usage?.server_time || data.server_time);
+    state.clockOffset = Number.isFinite(serverTime) ? serverTime - Date.now() : 0;
+    state.resets = { hour: Date.parse(data.usage?.hour_resets_at), day: Date.parse(data.usage?.day_resets_at), week: Date.parse(data.usage?.week_resets_at) };
+    state.remaining = { hour: hourlyRemaining, day: remaining, week: weeklyRemaining };
+    state.lastRefreshAt = Date.now();
+    state.lastRefreshAttempt = state.lastRefreshAt;
+    state.stale = false;
 
     byId("daily-limit").textContent = formattedNumber(state.daily);
     byId("empty-daily-limit").textContent = formattedNumber(state.daily);
     byId("minute-limit").textContent = formattedNumber(state.minute);
     byId("usage-count").textContent = formattedNumber(usage);
-    byId("model-page-name").textContent = state.model;
-    byId("model-page-id").textContent = state.model;
     byId("model-id").value = state.model;
     byId("remaining-label").textContent = `${formattedNumber(remaining)} istek kaldı · Her gün yenilenir`;
     byId("usage-progress").max = state.daily || 1;
@@ -141,7 +228,41 @@
     }
 
     renderService(data.service);
+    updateUsageClock();
+    scheduleRefresh();
     setBusy(state.busy);
+  }
+
+  function durationLabel(milliseconds) {
+    const minutes = Math.max(0, Math.ceil(milliseconds / 60000));
+    if (minutes < 60) return `${minutes} dk`;
+    const hours = Math.floor(minutes / 60);
+    const rest = minutes % 60;
+    if (hours < 24) return `${hours} sa${rest ? ` ${rest} dk` : ""}`;
+    return `${Math.floor(hours / 24)} gün${hours % 24 ? ` ${hours % 24} sa` : ""}`;
+  }
+
+  function updateUsageClock() {
+    if (!state.loaded) return;
+    const age = Date.now() - state.lastRefreshAt;
+    byId("usage-updated").textContent = state.stale ? "Yenilenemedi · Son alınan veriler gösteriliyor" : age < 60000 ? "Az önce güncellendi" : `${Math.floor(age / 60000)} dk önce güncellendi`;
+    byId("usage-updated").classList.toggle("stale", state.stale);
+    const now = Date.now() + state.clockOffset;
+    const rows = [["day", "remaining-label", "Her gün yenilenir"], ["hour", "hourly-remaining-label", "Her saat yenilenir"], ["week", "weekly-remaining-label", "Her hafta yenilenir"]];
+    for (const [period, id, fallback] of rows) {
+      const reset = state.resets[period];
+      const when = Number.isFinite(reset) ? reset <= now ? "Yenilenme zamanı geldi" : `${durationLabel(reset - now)} sonra yenilenir` : fallback;
+      byId(id).textContent = `${formattedNumber(state.remaining[period])} istek kaldı · ${when}`;
+    }
+  }
+
+  function scheduleRefresh() {
+    clearTimeout(refreshTimer);
+    clearInterval(countdownTimer);
+    if (document.hidden || state.view !== "overview" || !state.user || !state.loaded) return;
+    countdownTimer = setInterval(updateUsageClock, 15000);
+    const delay = Math.max(1000, AUTO_REFRESH_MS - (Date.now() - state.lastRefreshAttempt));
+    refreshTimer = setTimeout(() => refresh({ background: true }), delay);
   }
 
   async function request(method) {
@@ -149,17 +270,24 @@
   }
 
   async function api(url, method = "GET", payload) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20000);
+    try {
     const response = await fetch(url, {
       method,
       credentials: "same-origin",
       cache: "no-store",
+      signal: controller.signal,
       headers: method === "GET" ? { Accept: "application/json" } : { Accept: "application/json", "Content-Type": "application/json" },
       ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
     });
     if (response.status === 401 && url !== "/api/auth") {
+      state.user = null;
       state.secret = null;
       state.revealed = false;
+      if (state.key) renderSecret();
       updateExample();
+      scheduleRefresh();
       window.location.replace("/login");
       throw Object.assign(new Error("Oturumun sona erdi. Yeniden giriş yap."), { status: 401 });
     }
@@ -176,16 +304,30 @@
       });
     }
     return body;
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error("Sunucu yanıtı gecikti. Yeniden deneyebilirsin.");
+      throw error;
+    } finally { clearTimeout(timeout); }
   }
 
-  async function refresh() {
-    const wasBusy = state.busy;
-    setBusy(true);
-    clearMessage();
+  async function refresh({ background = false, allowBusy = false } = {}) {
+    if (refreshPromise) return refreshPromise;
+    if (state.busy && !allowBusy) { scheduleRefresh(); return; }
+    state.lastRefreshAttempt = Date.now();
+    if (!background) clearMessage();
+    byId("refresh-usage").disabled = true;
+    byId("refresh-usage").setAttribute("aria-busy", "true");
+    refreshPromise = (async () => {
     try {
-      const data = await request("GET");
+      const data = await api("/api/account");
       render(data);
     } catch (error) {
+      if (state.loaded) {
+        state.stale = true;
+        updateUsageClock();
+        if (!background) toast("Kullanım yenilenemedi. Son veriler gösteriliyor.");
+        return;
+      }
       state.loaded = false;
       const storageUnavailable = error.status === 503 && error.code === "storage_unavailable";
       byId("key-loading").hidden = true;
@@ -199,12 +341,20 @@
         ? "Anahtar oluşturma şu anda kullanılamıyor. Biraz sonra yeniden deneyebilirsin."
         : "Bağlantını kontrol edip yeniden deneyebilirsin.";
       byId("remaining-label").textContent = "Kullanım bilgisi şu anda alınamıyor";
+      byId("usage-updated").textContent = "Kullanım bilgisi alınamadı";
     } finally {
-      setBusy(wasBusy);
+      byId("refresh-usage").disabled = false;
+      byId("refresh-usage").setAttribute("aria-busy", "false");
+      refreshPromise = null;
+      setBusy(state.busy);
+      scheduleRefresh();
     }
+    })();
+    return refreshPromise;
   }
 
   async function createKey() {
+    if (refreshPromise) await refreshPromise;
     if (state.busy || !state.loaded) return;
     clearMessage();
     setBusy(true);
@@ -222,6 +372,7 @@
   }
 
   async function revokeKey(rotate = false) {
+    if (refreshPromise) await refreshPromise;
     if (state.busy || !state.key) return;
     const prompt = rotate
       ? "Mevcut anahtar iptal edilip yenisi oluşturulacak. Eski anahtarı kullanan uygulamaları yeni anahtarla güncellemen gerekecek. Devam edilsin mi?"
@@ -245,7 +396,7 @@
         announce("Anahtarın iptal edildi.", true);
       }
     } catch (error) {
-      await refresh();
+      await refresh({ allowBusy: true });
       announce(error.message);
     } finally {
       setBusy(false);
@@ -263,7 +414,7 @@
   }
 
   function codexConfig() {
-    return window.KlyCodexConfig.buildConfig(state.secret || undefined);
+    return window.KlyCodexConfig.buildConfig(state.secret || undefined, state.model);
   }
 
   function configNotice(action) {
@@ -297,8 +448,20 @@
     byId(id).hidden = false;
   }
 
-  function selectView(view) {
-    const users = view === "users" && state.user?.role === "admin";
+  function viewFromHash() {
+    const hash = window.location.hash.toLowerCase();
+    if (hash === "#models") return "models";
+    if (hash === "#users") return "users";
+    if (["#setup", "#codex-setup", "#baslarken"].includes(hash)) return "setup";
+    return "overview";
+  }
+
+  function selectView(view, { historyMode = "push", focus = true } = {}) {
+    if (!["overview", "models", "setup", "users"].includes(view)) view = "overview";
+    if (view === "users" && state.user?.role !== "admin") view = "overview";
+    const changed = state.view !== view;
+    state.view = view;
+    const users = view === "users";
     const models = view === "models";
     const setup = view === "setup";
     byId("overview-view").hidden = users || models || setup;
@@ -309,14 +472,28 @@
     byId("nav-models").classList.toggle("current", models);
     byId("nav-start").classList.toggle("current", setup);
     byId("nav-users").classList.toggle("current", users);
+    for (const [id, active] of [["nav-overview", view === "overview"], ["nav-models", models], ["nav-start", setup], ["nav-users", users]]) {
+      if (active) byId(id).setAttribute("aria-current", "page");
+      else byId(id).removeAttribute("aria-current");
+    }
     byId("breadcrumb-page").textContent = users ? "Kullanıcılar" : models ? "Modeller" : setup ? "Kurulum" : "Genel bakış";
+    document.title = `${users ? "Kullanıcılar" : models ? "Modeller" : setup ? "Kurulum" : "API Anahtarın"} · KlyAPI`;
+    const hash = `#${view}`;
+    if (historyMode !== "none" && window.location.hash !== hash) window.history[historyMode === "replace" ? "replaceState" : "pushState"](null, "", hash);
+    if (changed && focus) {
+      const heading = byId(users ? "users-title" : models ? "models-title" : setup ? "start-heading" : "page-title");
+      heading.tabIndex = -1;
+      heading.focus({ preventScroll: true });
+      window.scrollTo({ top: 0, behavior: "instant" });
+    }
     if (users) loadUsers();
+    scheduleRefresh();
   }
 
   async function authenticate() {
     byId("retry-auth").hidden = true;
     try {
-      const data = await api("/api/auth");
+      const data = await api("/api/account");
       if (!data.user) { window.location.replace("/login"); return; }
       state.user = data.user;
       for (const id of ["sidebar-user", "account-name"]) byId(id).textContent = data.user.username;
@@ -325,10 +502,8 @@
       byId("nav-users").hidden = data.user.role !== "admin";
       byId("auth-cover").hidden = true;
       document.body.classList.remove("auth-pending");
-      if (window.location.hash === "#codex-setup") selectView("setup");
-      fetch("/api", { cache: "no-store" }).then((response) => response.ok ? response.json() : null)
-        .then((service) => { if (service) renderService(service); }).catch(() => {});
-      refresh();
+      render(data);
+      selectView(viewFromHash(), { historyMode: "replace", focus: false });
     } catch (error) {
       if (error.status === 401) { window.location.replace("/login"); return; }
       byId("auth-status").textContent = "Oturum bilgisi alınamadı. Yeniden deneyebilirsin.";
@@ -355,8 +530,14 @@
     byId("users-count").textContent = formattedNumber(state.users.length);
     const list = byId("user-list");
     list.replaceChildren();
-    if (!state.users.length) { list.append(element("p", "users-empty", "Henüz kullanıcı bulunmuyor.")); return; }
-    for (const user of state.users) {
+    const query = byId("user-search").value.trim().toLocaleLowerCase("tr-TR");
+    const filter = byId("user-filter").value;
+    const matches = state.users.filter((user) => user.username.toLocaleLowerCase("tr-TR").includes(query)
+      && (filter === "all" || (filter === "active" ? user.enabled : !user.enabled)));
+    byId("user-match-count").textContent = `${formattedNumber(matches.length)} / ${formattedNumber(state.users.length)} kullanıcı`;
+    if (!matches.length) { list.append(element("p", "users-empty", state.users.length ? "Aramana uygun kullanıcı bulunamadı." : "Henüz kullanıcı bulunmuyor.")); return; }
+    const fragment = document.createDocumentFragment();
+    for (const user of matches) {
       const row = element("article", "user-row");
       const identity = element("div", "user-identity");
       identity.append(element("span", "user-avatar", user.username.slice(0, 1).toUpperCase()));
@@ -375,21 +556,31 @@
         actionButton("Şifre sıfırla", () => openUserDialog("password", user), own),
         actionButton(user.enabled ? "Erişimi kapat" : "Erişimi aç", () => toggleUser(user), user.role === "admin" || own));
       row.append(identity, limits, status, actions);
-      list.append(row);
+      fragment.append(row);
     }
+    list.append(fragment);
   }
 
-  async function loadUsers() {
+  async function loadUsers({ force = false } = {}) {
     if (state.user?.role !== "admin") return;
+    if (usersPromise) {
+      await usersPromise;
+      if (!force) return;
+    }
+    if (!force && state.usersLoadedAt && Date.now() - state.usersLoadedAt < USER_CACHE_MS) { renderUsers(); return; }
     byId("users-message").hidden = true;
-    byId("users-loading").hidden = false;
+    byId("users-loading").hidden = Boolean(state.usersLoadedAt);
     byId("refresh-users").disabled = true;
+    usersPromise = (async () => {
     try {
       const data = await api("/api/users");
       state.users = Array.isArray(data.users) ? data.users : [];
+      state.usersLoadedAt = Date.now();
       renderUsers();
     } catch (error) { showFormMessage("users-message", error.message); }
-    finally { byId("users-loading").hidden = true; byId("refresh-users").disabled = false; }
+    finally { byId("users-loading").hidden = true; byId("refresh-users").disabled = false; usersPromise = null; }
+    })();
+    return usersPromise;
   }
 
   function openUserDialog(mode, user) {
@@ -435,7 +626,7 @@
       byId("user-dialog").close();
       byId("user-password").value = "";
       toast(mode === "create" ? "Kullanıcı oluşturuldu" : "Değişiklikler kaydedildi");
-      await loadUsers();
+      await loadUsers({ force: true });
       if (payload.username.toLowerCase() === state.user.username.toLowerCase()) refresh();
     } catch (error) { showFormMessage("user-form-message", error.message); }
     finally { form.setAttribute("aria-busy", "false"); byId("save-user").disabled = false; }
@@ -447,7 +638,7 @@
     try {
       await api("/api/users", "PATCH", { username: user.username, enabled: !user.enabled });
       toast(user.enabled ? "Kullanıcı erişimi kapatıldı" : "Kullanıcı erişimi açıldı");
-      await loadUsers();
+      await loadUsers({ force: true });
     } catch (error) { showFormMessage("users-message", error.message); }
   }
 
@@ -473,17 +664,72 @@
     byId("logout").disabled = true;
     try {
       await api("/api/auth", "POST", { action: "logout" });
+      state.user = null;
       state.secret = null;
       state.revealed = false;
+      if (state.key) renderSecret();
       updateExample();
+      scheduleRefresh();
       window.location.replace("/login");
     } catch (error) { announce(error.message); byId("logout").disabled = false; }
+  }
+
+  const commandViews = [
+    { view: "overview", label: "Genel bakış", description: "API anahtarı ve kullanım", icon: "i-key" },
+    { view: "models", label: "Modeller", description: "Kullanılabilir model bilgileri", icon: "i-code" },
+    { view: "setup", label: "Kurulum", description: "Codex yapılandırması ve API bağlantısı", icon: "i-desktop" },
+    { view: "users", label: "Kullanıcılar", description: "Hesap ve kota yönetimi", icon: "i-users", admin: true },
+  ];
+
+  function filteredCommands() {
+    const query = byId("command-search").value.trim().toLocaleLowerCase("tr-TR");
+    return commandViews.filter((item) => (!item.admin || state.user?.role === "admin")
+      && `${item.label} ${item.description}`.toLocaleLowerCase("tr-TR").includes(query));
+  }
+
+  function runCommand(view) {
+    byId("command-dialog").close();
+    selectView(view);
+  }
+
+  function renderCommands() {
+    const items = filteredCommands();
+    commandIndex = Math.max(0, Math.min(commandIndex, items.length - 1));
+    const list = byId("command-results");
+    list.replaceChildren();
+    if (!items.length) { list.append(element("p", "command-empty", "Eşleşen bölüm yok.")); return; }
+    items.forEach((item, index) => {
+      const row = element("div");
+      row.setAttribute("role", "listitem");
+      const button = element("button", `command-item${index === commandIndex ? " selected" : ""}`);
+      button.type = "button";
+      button.dataset.view = item.view;
+      const label = element("span", "command-item-text");
+      label.append(element("strong", "", item.label), element("small", "", item.description));
+      button.append(label, element("span", "command-arrow", "↵"));
+      button.addEventListener("click", () => runCommand(item.view));
+      button.addEventListener("focus", () => {
+        commandIndex = index;
+        list.querySelectorAll(".command-item").forEach((node, buttonIndex) => node.classList.toggle("selected", buttonIndex === index));
+      });
+      row.append(button);
+      list.append(row);
+    });
+  }
+
+  function openCommands() {
+    if (!state.user || byId("command-dialog").open || document.querySelector("dialog[open]")) return;
+    commandIndex = 0;
+    byId("command-search").value = "";
+    renderCommands();
+    byId("command-dialog").showModal();
+    byId("command-search").focus();
   }
 
   byId("nav-overview").addEventListener("click", () => selectView("overview"));
   byId("nav-models").addEventListener("click", () => selectView("models"));
   byId("nav-users").addEventListener("click", () => selectView("users"));
-  byId("nav-start").addEventListener("click", (event) => { event.preventDefault(); selectView("setup"); });
+  byId("setup-model").addEventListener("change", (event) => setModel(event.target.value));
   byId("aside-model-link").addEventListener("click", () => selectView("models"));
   byId("footer-key-link").addEventListener("click", (event) => {
     event.preventDefault();
@@ -491,7 +737,34 @@
     requestAnimationFrame(() => byId("anahtar").scrollIntoView({ behavior: "smooth", block: "start" }));
   });
   document.querySelectorAll('a[href="#codex-setup"]').forEach((link) => link.addEventListener("click", (event) => { event.preventDefault(); selectView("setup"); }));
-  byId("refresh-users").addEventListener("click", loadUsers);
+  byId("refresh-users").addEventListener("click", () => loadUsers({ force: true }));
+  byId("user-search").addEventListener("input", renderUsers);
+  byId("user-filter").addEventListener("change", renderUsers);
+  byId("refresh-usage").addEventListener("click", () => refresh());
+  byId("open-command").addEventListener("click", openCommands);
+  byId("command-search").addEventListener("input", () => { commandIndex = 0; renderCommands(); });
+  byId("command-dialog").addEventListener("keydown", (event) => {
+    if (["ArrowDown", "ArrowUp"].includes(event.key)) {
+      const buttons = [...byId("command-results").querySelectorAll(".command-item")];
+      if (!buttons.length) return;
+      event.preventDefault();
+      if (document.activeElement === byId("command-search")) commandIndex = event.key === "ArrowDown" ? 0 : buttons.length - 1;
+      else commandIndex = (commandIndex + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+      buttons[commandIndex].focus();
+    } else if (event.key === "Enter" && document.activeElement === byId("command-search")) {
+      const item = filteredCommands()[commandIndex];
+      if (item) { event.preventDefault(); runCommand(item.view); }
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+      event.preventDefault();
+      openCommands();
+    }
+  });
+  window.addEventListener("hashchange", () => { if (state.user) selectView(viewFromHash(), { historyMode: "none" }); });
+  window.addEventListener("popstate", () => { if (state.user) selectView(viewFromHash(), { historyMode: "none" }); });
+  document.addEventListener("visibilitychange", scheduleRefresh);
   byId("add-user").addEventListener("click", () => openUserDialog("create"));
   byId("user-form").addEventListener("submit", saveUser);
   byId("password-form").addEventListener("submit", changePassword);
@@ -512,6 +785,8 @@
   byId("download-codex-config")?.addEventListener("click", downloadCodexConfig);
   document.querySelectorAll("[data-copy-target]").forEach((button) => button.addEventListener("click", () => copy(byId(button.dataset.copyTarget).value, "Kopyalandı")));
   window.addEventListener("pagehide", () => {
+    clearTimeout(refreshTimer);
+    clearInterval(countdownTimer);
     for (const url of downloadUrls) URL.revokeObjectURL(url);
     downloadUrls.clear();
     state.secret = null;
@@ -519,6 +794,7 @@
     if (state.key) renderSecret();
     else updateExample();
   });
+  window.addEventListener("pageshow", scheduleRefresh);
   setBusy(false);
   authenticate();
 })();

@@ -1,3 +1,5 @@
+const { serviceInfo } = require("../lib/models");
+
 module.exports = function status(req, res) {
   res.setHeader("access-control-allow-origin", "*");
   res.setHeader("cache-control", "no-store");
@@ -11,9 +13,8 @@ module.exports = function status(req, res) {
   res.statusCode = 200;
   res.end(req.method === "HEAD" ? undefined : JSON.stringify({
     name: "KlyAPI", key_page: "/key", base_url: "https://klyapi.vercel.app/api/v1",
-    model: "gpt-6.1-sol", authentication: "Bearer API_KEY", generation_available: true,
-    message: "gpt-6.1-sol erişimi açık. OpenAI veya Anthropic uyumlu uygulamanı bağlayabilirsin.",
-    provider_status: "available",
+    ...serviceInfo, authentication: "Bearer API_KEY",
+    provider_status: serviceInfo.generation_available ? "available" : "unavailable",
     endpoints: ["/api/v1/models", "/api/v1/responses", "/api/v1/chat/completions", "/api/v1/messages"],
   }));
 };

@@ -5,14 +5,17 @@
 })(typeof window === "object" ? window : globalThis, function configure() {
   "use strict";
   const PLACEHOLDER = "KLYAPI_API_ANAHTARIN";
-  function buildConfig(key) {
+  const MODELS = Object.freeze(["gpt-6.1-sol", "gpt-6-astra"]);
+  function buildConfig(key, model) {
     // Only a personal gateway token may enter this generated local file.
     // Provider secrets and arbitrary strings can never become TOML content.
     const token = typeof key === "string" && /^kly_[A-Za-z0-9_-]{43}$/.test(key) ? key : PLACEHOLDER;
+    const selectedModel = MODELS.includes(model) ? model : MODELS[0];
     return [
       'model_provider = "KlyAPI"',
-      'model = "gpt-6.1-sol"',
-      'review_model = "gpt-6.1-sol"',
+      `model = "${selectedModel}"`,
+      `review_model = "${selectedModel}"`,
+      "model_auto_compact_token_limit = 64000",
       'web_search = "live"',
       "",
       "[model_providers.KlyAPI]",
@@ -31,5 +34,5 @@
       "",
     ].join("\n");
   }
-  return Object.freeze({ buildConfig, PLACEHOLDER });
+  return Object.freeze({ buildConfig, PLACEHOLDER, MODELS });
 });

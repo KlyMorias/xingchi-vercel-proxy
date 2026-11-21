@@ -19,17 +19,20 @@
     message.hidden = true;
     button.disabled = true;
     button.querySelector("span").textContent = "Giriş yapılıyor…";
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20000);
     try {
-      const response = await fetch("/api/auth", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify({ action: "login", username: username.value.trim(), password: password.value }) });
+      const response = await fetch("/api/auth", { method: "POST", credentials: "same-origin", signal: controller.signal, headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify({ action: "login", username: username.value.trim(), password: password.value }) });
       let body;
       try { body = await response.json(); } catch { throw new Error("Giriş servisine ulaşılamadı. Biraz sonra yeniden dene."); }
       if (!response.ok) throw new Error(typeof body.error === "string" ? body.error : body.error?.message || "Giriş yapılamadı. Bilgilerini kontrol et.");
       password.value = "";
       window.location.replace("/key");
     } catch (error) {
-      message.textContent = error.message || "Bağlantı kurulamadı. Yeniden dene.";
+      message.textContent = error.name === "AbortError" ? "Giriş isteği zaman aşımına uğradı. Yeniden deneyebilirsin." : error.message || "Bağlantı kurulamadı. Yeniden dene.";
       message.hidden = false;
     } finally {
+      clearTimeout(timeout);
       busy = false;
       button.disabled = false;
       button.querySelector("span").textContent = "Giriş yap";

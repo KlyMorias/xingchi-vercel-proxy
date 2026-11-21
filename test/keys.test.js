@@ -118,7 +118,9 @@ test("hour, day and Monday-based week usage reset and old refunds do not touch n
   assert.equal((await f.store.getAccountInfo("user-alice")).usage.used_this_week, 1);
   await f.store.release(current.reservation);
   assert.deepEqual((await f.store.getAccountInfo("user-alice")).usage,
-    { used_this_hour: 0, remaining_this_hour: 20, used_today: 0, remaining_today: 50, used_this_week: 0, remaining_this_week: 200 });
+    { used_this_hour: 0, remaining_this_hour: 20, used_today: 0, remaining_today: 50, used_this_week: 0, remaining_this_week: 200,
+      hour_resets_at: "2026-11-24T01:00:00.000Z", day_resets_at: "2026-11-25T00:00:00.000Z",
+      week_resets_at: "2026-11-30T00:00:00.000Z", server_time: "2026-11-24T00:10:00.000Z" });
 });
 
 test("daily cap is account-based, persists after rotation and is independent from models listing", async () => {

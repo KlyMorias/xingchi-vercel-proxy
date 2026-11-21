@@ -3,9 +3,10 @@ const { chatRequestToResponses, chatCompletionFromResponse, createChatStream } =
 const { messagesRequestToResponses, messageFromResponse, createMessagesStream } = require("../lib/anthropic-compat");
 const { collectResponse, streamResponse } = require("../lib/responses-transport");
 const { startKeepalive } = require("../lib/client-keepalive");
+const { DEFAULT_MODEL, resolveModel, availableModels, modelCatalog } = require("../lib/models");
+const { readJsonBody } = require("../lib/request-body");
 
 const UPSTREAM_ORIGIN = "https://api.xingchiapi.com";
-const MAX_BODY_BYTES = 1_000_000;
 const ALLOWED_ROUTES = new Set([
   "GET v1/models",
   "POST v1/messages",
@@ -31,51 +32,6 @@ function requestCredentials(req) {
     : undefined;
   return [bearer, req.headers["x-api-key"], req.headers["x-proxy-key"]]
     .filter((value) => typeof value === "string");
-}
-
-async function readJsonBody(req) {
-  const encoding = req.headers["content-encoding"];
-  if (encoding && encoding.toLowerCase() !== "identity") {
-    const error = new Error("Unsupported content encoding");
-    error.statusCode = 415;
-    throw error;
-  }
-
-  const contentLength = Number(req.headers["content-length"] || 0);
-  if (contentLength > MAX_BODY_BYTES) {
-    const error = new Error("Request body too large");
-    error.statusCode = 413;
-    throw error;
-  }
-
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of req) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    size += buffer.length;
-    if (size > MAX_BODY_BYTES) {
-      const error = new Error("Request body too large");
-      error.statusCode = 413;
-      throw error;
-    }
-    chunks.push(buffer);
-  }
-
-  const body = Buffer.concat(chunks).toString("utf8");
-  let parsed;
-  try {
-    parsed = JSON.parse(body);
-  } catch {
-    const error = new Error("A valid JSON object is required");
-    error.statusCode = 400;
-    throw error;
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    const error = new Error("A JSON object is required");
-    error.statusCode = 400;
-    throw error;
-  }
-  return parsed;
 }
 
 function enforceOutputLimit(payload, path) {
@@ -174,7 +130,7 @@ return async function handler(req, res) {
   };
   res.setHeader("access-control-allow-origin", "*");
   res.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
-  res.setHeader("access-control-allow-headers", "authorization, content-type, x-api-key, x-proxy-key, anthropic-version, anthropic-beta, openai-beta, anthropic-dangerous-direct-browser-access");
+  res.setHeader("access-control-allow-headers", "authorization, content-type, content-encoding, x-api-key, x-proxy-key, anthropic-version, anthropic-beta, openai-beta, anthropic-dangerous-direct-browser-access");
   res.setHeader("access-control-expose-headers", "retry-after, x-request-id, x-klyapi-error-source, server-timing");
   if (req.method === "OPTIONS") {
     res.statusCode = 204;
@@ -204,9 +160,8 @@ return async function handler(req, res) {
     return;
   }
 
-  const apiKey = process.env.XINGCHI_API_KEY;
   const authMode = process.env.UPSTREAM_AUTH_MODE || "authorization";
-  if (!apiKey || !["authorization", "x-api-key"].includes(authMode)) {
+  if (!availableModels().length || !["authorization", "x-api-key"].includes(authMode)) {
     sendJson(res, 503, "Upstream credentials are not configured");
     return;
   }
@@ -214,6 +169,7 @@ return async function handler(req, res) {
   let body;
   let clientPayload;
   let clientStream = false;
+  let selectedModel;
   const format = path === "v1/messages" ? "messages" : path === "v1/chat/completions" ? "chat" : "responses";
   if (req.method === "POST") {
     const contentType = req.headers["content-type"] || "";
@@ -223,8 +179,13 @@ return async function handler(req, res) {
     }
     try {
       const payload = await readJsonBody(req);
-      if (payload.model && payload.model !== "gpt-6.1-sol") {
-        sendJson(res, 400, "Only gpt-6.1-sol is available");
+      selectedModel = resolveModel(payload.model === undefined ? DEFAULT_MODEL : payload.model);
+      if (!selectedModel) {
+        sendJson(res, 400, "Requested model is not available");
+        return;
+      }
+      if (!selectedModel.apiKey) {
+        sendJson(res, 503, "Requested model credentials are not configured");
         return;
       }
       if (payload.n !== undefined && payload.n !== 1) {
@@ -236,7 +197,7 @@ return async function handler(req, res) {
         return;
       }
       clientStream = payload.stream === true;
-      clientPayload = JSON.parse(enforceOutputLimit({ ...payload, model: "gpt-6.1-sol" }, path));
+      clientPayload = JSON.parse(enforceOutputLimit({ ...payload, model: selectedModel.id }, path));
       let upstreamPayload;
       if (format === "chat") upstreamPayload = chatRequestToResponses(clientPayload);
       else if (format === "messages") upstreamPayload = messagesRequestToResponses(clientPayload);
@@ -283,9 +244,7 @@ return async function handler(req, res) {
     res.statusCode = 200;
     res.setHeader("content-type", "application/json; charset=utf-8");
     res.setHeader("cache-control", "no-store");
-    res.end(JSON.stringify({ object: "list", data: [
-      { id: "gpt-6.1-sol", object: "model", created: 0, owned_by: "klyapi" },
-    ] }));
+    res.end(JSON.stringify(modelCatalog()));
     return;
   }
 
@@ -310,7 +269,7 @@ return async function handler(req, res) {
     const upstreamStart = performance.now();
     const upstream = await fetch(url, {
       method: req.method,
-      headers: upstreamHeaders(req, apiKey, authMode),
+      headers: upstreamHeaders(req, selectedModel.apiKey, authMode),
       body,
       redirect: "manual",
       signal: controller.signal,
@@ -331,15 +290,15 @@ return async function handler(req, res) {
       }
     } else if (clientStream) {
       phase = "stream";
-      const adapter = format === "chat" ? createChatStream("gpt-6.1-sol", { includeUsage: clientPayload.stream_options?.include_usage === true })
-        : format === "messages" ? createMessagesStream("gpt-6.1-sol") : null;
+      const adapter = format === "chat" ? createChatStream(selectedModel.id, { includeUsage: clientPayload.stream_options?.include_usage === true })
+        : format === "messages" ? createMessagesStream(selectedModel.id) : null;
       await streamResponse(upstream, res, format, adapter);
     } else {
       phase = "collect";
       const response = await collectResponse(upstream);
       keepalive?.stop();
-      const result = format === "chat" ? chatCompletionFromResponse(response, "gpt-6.1-sol")
-        : format === "messages" ? messageFromResponse(response, "gpt-6.1-sol") : response;
+      const result = format === "chat" ? chatCompletionFromResponse(response, selectedModel.id)
+        : format === "messages" ? messageFromResponse(response, selectedModel.id) : response;
       if (!res.headersSent) {
         res.statusCode = 200;
         res.setHeader("content-type", "application/json; charset=utf-8");

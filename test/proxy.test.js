@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
+const { gzipSync, zstdCompressSync } = require("node:zlib");
 
 const proxyModule = require("../api/proxy.js");
 const handler = proxyModule.createHandler({ isConfigured: () => true,
@@ -72,6 +73,8 @@ const originalEnv = { ...process.env };
 test.beforeEach(() => {
   delete process.env.MAX_OUTPUT_TOKENS;
   delete process.env.DEFAULT_OUTPUT_TOKENS;
+  delete process.env.XINGCHI_SOL_API_KEY;
+  delete process.env.XINGCHI_ASTRA_API_KEY;
 });
 test.afterEach(() => {
   global.fetch = originalFetch;
@@ -146,14 +149,14 @@ test("rejects unlisted paths instead of proxying arbitrary routes", async () => 
   assert.equal(calls, 0);
 });
 
-test("rejects request bodies above the fixed size limit", async () => {
+test("rejects request bodies above the fixed ingress size limit", async () => {
   process.env.PROXY_ACCESS_TOKEN = "kly_" + "a".repeat(43);
   process.env.XINGCHI_API_KEY = "upstream-secret";
   let calls = 0;
   global.fetch = async () => { calls++; };
 
   const res = makeResponse();
-  const body = `{"data":"${"x".repeat(1_000_001)}"}`;
+  const body = `{"data":"${"x".repeat(4_400_001)}"}`;
   await handler(makeRequest({ headers: {
     authorization: `Bearer ${process.env.PROXY_ACCESS_TOKEN}`,
     "content-type": "application/json",
@@ -161,6 +164,47 @@ test("rejects request bodies above the fixed size limit", async () => {
 
   assert.equal(res.statusCode, 413);
   assert.equal(calls, 0);
+});
+
+test("accepts a conversation larger than the old 1 MB cap and forwards decompressed gzip and zstd JSON", async () => {
+  process.env.XINGCHI_API_KEY = "upstream-secret";
+  const input = "history ".repeat(150000);
+  const raw = Buffer.from(JSON.stringify({ input, model: "gpt-6.1-sol" }));
+  assert.ok(raw.length > 1_000_000);
+  const observed = [];
+  let reservations = 0;
+  const localHandler = proxyModule.createHandler({ isConfigured: () => true,
+    reserve: async () => { reservations++; return { ok: true, reservation: null }; }, release: async () => {} });
+  global.fetch = async (_url, options) => { observed.push(options); return successfulResponse(); };
+  for (const [encoding, body] of [["identity", raw], ["gzip", gzipSync(raw)], ["zstd", zstdCompressSync(raw)]]) {
+    const res = makeResponse();
+    await localHandler(makeRequest({ headers: { authorization: "Bearer kly_" + "a".repeat(43),
+      "content-type": "application/json", "content-encoding": encoding, "content-length": String(body.length) }, body }), res);
+    assert.equal(res.statusCode, 200, `${encoding}: ${res.body}`);
+    const forwarded = observed.at(-1);
+    assert.equal(JSON.parse(forwarded.body).input[0].content[0].text, input);
+    assert.equal(forwarded.headers.get("content-encoding"), null, "upstream JSON must not retain the incoming compression header");
+  }
+  assert.equal(observed.length, 3);
+  assert.equal(reservations, 3);
+});
+
+test("invalid or unsupported compressed bodies fail before reserving quota or contacting the provider", async () => {
+  process.env.XINGCHI_API_KEY = "upstream-secret";
+  let reservations = 0;
+  let calls = 0;
+  const localHandler = proxyModule.createHandler({ isConfigured: () => true,
+    reserve: async () => { reservations++; return { ok: true, reservation: null }; }, release: async () => {} });
+  global.fetch = async () => { calls++; throw new Error("Must not reach provider"); };
+  for (const [encoding, body, status] of [["gzip", Buffer.from("broken"), 400], ["gzip, br", Buffer.from("{}"), 415],
+    ["gzip", gzipSync(Buffer.alloc(16_000_001, 120)), 413]]) {
+    const res = makeResponse();
+    await localHandler(makeRequest({ headers: { authorization: "Bearer kly_" + "a".repeat(43),
+      "content-type": "application/json", "content-encoding": encoding }, body }), res);
+    assert.equal(res.statusCode, status);
+  }
+  assert.equal(calls, 0);
+  assert.equal(reservations, 0);
 });
 
 test("rejects output limits above the configured ceiling", async () => {
@@ -342,6 +386,109 @@ test("serves the registered model locally after reserving the caller's minute qu
   assert.equal(catalog.data[0].object, "model");
   assert.match(res.headers["server-timing"], /(?:^|,\s*)quota;dur=\d+(?:\.\d+)?(?:,|$)/);
   assert.doesNotMatch(res.headers["server-timing"], /upstream/);
+});
+
+test("routes each configured model to its own server credential across supported APIs and shared account quotas", async () => {
+  process.env.XINGCHI_API_KEY = "legacy-sol-secret";
+  process.env.XINGCHI_SOL_API_KEY = "dedicated-sol-secret";
+  process.env.XINGCHI_ASTRA_API_KEY = "astra-only-secret";
+  const token = "kly_" + "k".repeat(43);
+  const reservations = [];
+  const dispatch = handler.createHandler({ isConfigured: () => true,
+    reserve: async (key, options) => { reservations.push({ key, options }); return { ok: true, reservation: null }; },
+    release: async () => {} });
+  const seen = [];
+  global.fetch = async (_url, options) => {
+    const payload = JSON.parse(options.body);
+    seen.push({ model: payload.model, credential: options.headers.get("authorization") });
+    return new Response(JSON.stringify({ ...responseFixture(), model: payload.model }), { headers: { "content-type": "application/json" } });
+  };
+  const paths = ["v1/responses", "v1/chat/completions", "v1/messages"];
+  for (const model of ["gpt-6.1-sol", "gpt-6-astra"]) {
+    for (const path of paths) {
+      const payload = path === "v1/responses" ? { input: "hello" } : { messages: [{ role: "user", content: "hello" }], max_tokens: 16 };
+      const res = makeResponse();
+      await dispatch(makeRequest({ path, headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ ...payload, model }) }), res);
+      assert.equal(res.statusCode, 200, res.body);
+      assert.equal(JSON.parse(res.body).model, model, `response model for ${path}`);
+      assert.equal(res.body.includes("secret"), false);
+    }
+  }
+  assert.deepEqual(seen, [
+    ...Array.from({ length: 3 }, () => ({ model: "gpt-6.1-sol", credential: "Bearer dedicated-sol-secret" })),
+    ...Array.from({ length: 3 }, () => ({ model: "gpt-6-astra", credential: "Bearer astra-only-secret" })),
+  ]);
+  assert.equal(reservations.length, 6);
+  assert.ok(reservations.every(({ key, options }) => key === token && options.consumeDaily === true));
+});
+
+test("Astra streams preserve the selected model in Chat and Anthropic protocol adapters", async () => {
+  process.env.XINGCHI_ASTRA_API_KEY = "astra-only-secret";
+  process.env.UPSTREAM_AUTH_MODE = "x-api-key";
+  const model = "gpt-6-astra";
+  let calls = 0;
+  global.fetch = async (_url, options) => {
+    calls++;
+    assert.equal(options.headers.get("x-api-key"), "astra-only-secret");
+    assert.equal(options.headers.get("authorization"), null);
+    assert.equal(JSON.parse(options.body).model, model);
+    return new Response(eventFrame({ type: "response.completed", response: { ...responseFixture(), model } }), {
+      headers: { "content-type": "text/event-stream" },
+    });
+  };
+  for (const path of ["v1/chat/completions", "v1/messages"]) {
+    const res = makeResponse();
+    await handler(makeRequest({ path, headers: { authorization: "Bearer kly_" + "k".repeat(43), "content-type": "application/json" },
+      body: JSON.stringify({ model, messages: [{ role: "user", content: "hello" }], stream: true, max_tokens: 16 }) }), res);
+    assert.equal(res.statusCode, 200);
+    const data = res.body.split(/\r?\n/).filter((line) => line.startsWith("data: ") && line !== "data: [DONE]").map((line) => JSON.parse(line.slice(6)));
+    const models = data.flatMap((item) => item.model ? [item.model] : item.message?.model ? [item.message.model] : []);
+    assert.ok(models.length > 0);
+    assert.ok(models.every((id) => id === model));
+  }
+  assert.equal(calls, 2);
+});
+
+test("catalog lists only configured model IDs and omitting model still defaults to Sol", async () => {
+  process.env.XINGCHI_API_KEY = "fallback-sol-secret";
+  process.env.XINGCHI_ASTRA_API_KEY = "astra-only-secret";
+  const headers = { authorization: "Bearer kly_" + "k".repeat(43), "content-type": "application/json" };
+  let seen;
+  global.fetch = async (_url, options) => { seen = { credential: options.headers.get("authorization"), payload: JSON.parse(options.body) }; return successfulResponse(); };
+  const defaulted = makeResponse();
+  await handler(makeRequest({ headers }), defaulted);
+  assert.equal(defaulted.statusCode, 200);
+  assert.equal(seen.credential, "Bearer fallback-sol-secret");
+  assert.equal(seen.payload.model, "gpt-6.1-sol");
+  const both = makeResponse();
+  await handler(makeRequest({ method: "GET", path: "v1/models", headers }), both);
+  assert.deepEqual(JSON.parse(both.body).data.map(({ id }) => id), ["gpt-6.1-sol", "gpt-6-astra"]);
+  assert.equal(both.body.includes("secret"), false);
+  delete process.env.XINGCHI_API_KEY;
+  const astra = makeResponse();
+  await handler(makeRequest({ method: "GET", path: "v1/models", headers }), astra);
+  assert.deepEqual(JSON.parse(astra.body).data.map(({ id }) => id), ["gpt-6-astra"]);
+  const missingDefault = makeResponse();
+  await handler(makeRequest({ headers }), missingDefault);
+  assert.equal(missingDefault.statusCode, 503, "Astra cannot silently replace an omitted Sol model");
+});
+
+test("unknown, malformed and unconfigured model selections never call or spend the other model's credential", async () => {
+  process.env.XINGCHI_API_KEY = "fallback-sol-secret";
+  let calls = 0;
+  let reservations = 0;
+  global.fetch = async () => { calls++; throw new Error("must not call provider"); };
+  const dispatch = handler.createHandler({ isConfigured: () => true, reserve: async () => { reservations++; return { ok: true }; } });
+  for (const model of ["gpt-6-astra", "gpt-6.1-astra", "__proto__", null, false, "", ["gpt-6.1-sol"], { id: "gpt-6.1-sol" }]) {
+    const res = makeResponse();
+    await dispatch(makeRequest({ headers: { authorization: "Bearer kly_" + "k".repeat(43), "content-type": "application/json" },
+      body: JSON.stringify({ model, input: "hello" }) }), res);
+    assert.equal(res.statusCode, model === "gpt-6-astra" ? 503 : 400);
+    assert.equal(res.body.includes("fallback-sol-secret"), false);
+  }
+  assert.equal(calls, 0);
+  assert.equal(reservations, 0);
 });
 
 test("local model discovery still rejects an invalid or exhausted API key", async () => {
