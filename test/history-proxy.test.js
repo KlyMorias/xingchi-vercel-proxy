@@ -238,20 +238,27 @@ for (const format of FORMATS) {
     });
   }
 
-  test(`${format}: an unsupported old image preserves the complete native history`, async () => {
+  test(`${format}: an old image stays native while surrounding text and tools fold`, async () => {
     const payload = payloadFor(format, 55, false, { oldImage: true });
     const expected = canonicalPayload(format, payload);
     const observed = await dispatch(format, payload);
     assertClientSuccess(format, false, observed.res);
     assertAccounting(observed, true);
-    assert.deepEqual(observed.upstreamRequests[0].payload, expected);
-    assert.equal(observed.res.headers["x-klyapi-history"], undefined);
-    assert.equal(observed.upstreamRequests[0].payload.input.some(isArchive), false);
+    const forwarded = observed.upstreamRequests[0].payload;
+    const archives = forwarded.input.filter(isArchive);
+    const imageMessage = expected.input.find((item) => item.content?.some((part) => part.type === "input_image"));
+    assert.ok(archives.length > 0, "a valid historical image must not prevent completed text/tool history from folding");
+    assert.deepEqual(forwarded.input.find((item) => item.content?.some((part) => part.type === "input_image")), imageMessage);
+    assert.deepEqual(forwarded.input.flatMap((item) => isArchive(item) ? archiveItems(item) : [item]), expected.input,
+      "the historical image and all original records retain their order");
+    for (const archive of archives) assert.doesNotMatch(archive.content[0].text, /input_image|historical\.png/);
+    assert.deepEqual({ ...forwarded, input: undefined }, { ...expected, input: undefined });
+    assert.equal(observed.res.headers["x-klyapi-history"], "folded");
   });
 
   for (const stream of [false, true]) {
     test(`${format} ${stream ? "SSE" : "JSON"}: an exact provider HTTP 400 turn limit becomes a context error with one refund and no retry`, async () => {
-      const payload = payloadFor(format, 55, stream, { oldImage: true });
+      const payload = payloadFor(format, 44, stream);
       const observed = await dispatch(format, payload, () => new Response(JSON.stringify({ error: {
         type: "invalid_request_error", code: "session_turn_limit_exceeded", message: "The conversation exceeded the session turn limit." } }),
       { status: 400, headers: { "content-type": "application/json", "x-request-id": "req_turn_limit" } }));
@@ -270,6 +277,42 @@ for (const format of FORMATS) {
     });
   }
 }
+
+test("Responses keeps old image and file messages native and in order while completed text/tool history folds around them", async () => {
+  const payload = payloadFor("responses", 55, false, { oldImage: true });
+  payload.input[1].content.push({ type: "input_file", file_id: "file_historical_attachment", filename: "history.pdf" });
+  payload.input.find((item) => item.role === "user" && item.content[0]?.text === "Question 14")
+    .content.push({ type: "input_file", file_url: "https://example.com/historical-document.pdf", filename: "reference.pdf" });
+  const original = structuredClone(payload);
+  const expected = canonicalPayload("responses", payload);
+  const observed = await dispatch("responses", payload);
+  assertClientSuccess("responses", false, observed.res);
+  assertAccounting(observed, true);
+  const forwarded = observed.upstreamRequests[0].payload;
+  const multimodal = (item) => item.content?.some((part) => ["input_image", "input_file"].includes(part.type));
+  assert.ok(forwarded.input.some(isArchive));
+  assert.deepEqual(forwarded.input.filter(multimodal), expected.input.filter(multimodal),
+    "mixed text/image/file messages must stay native with all their fields and ordering intact");
+  assert.deepEqual(forwarded.input.flatMap((item) => isArchive(item) ? archiveItems(item) : [item]), expected.input);
+  for (const archive of forwarded.input.filter(isArchive)) {
+    assert.doesNotMatch(archive.content[0].text, /input_image|input_file|file_historical_attachment|historical-document\.pdf|historical\.png/);
+  }
+  assert.deepEqual({ ...forwarded, input: undefined }, { ...expected, input: undefined });
+  assert.deepEqual(payload, original);
+  assert.equal(observed.res.headers["x-klyapi-history"], "folded");
+});
+
+test("an unknown old Responses content block preserves the complete native history without guessing a representation", async () => {
+  const payload = payloadFor("responses", 55);
+  payload.input[1].content.push({ type: "unknown_history_content", value: "preserve this exact opaque record" });
+  const expected = canonicalPayload("responses", payload);
+  const observed = await dispatch("responses", payload);
+  assertClientSuccess("responses", false, observed.res);
+  assertAccounting(observed, true);
+  assert.deepEqual(observed.upstreamRequests[0].payload, expected);
+  assert.equal(observed.res.headers["x-klyapi-history"], undefined);
+  assert.equal(observed.upstreamRequests[0].payload.input.some(isArchive), false);
+});
 
 test("a turn limit remaining after a successful fold is returned once and refunds the original reservation", async () => {
   const observed = await dispatch("responses", payloadFor("responses", 55), () => new Response(JSON.stringify({ error: {

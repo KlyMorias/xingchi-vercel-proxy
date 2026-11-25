@@ -175,10 +175,10 @@ test("open parallel chains remain native, including records between the calls", 
   assert.deepEqual(expand(result.payload.input), input);
 });
 
-test("unsafe unknown, image, file and encrypted archive formats fail closed", () => {
+test("unsafe unknown, assistant media and encrypted archive formats fail closed", () => {
   for (const item of [
     { type: "unknown", data: "keep me" },
-    message("user", "Old image", { content: [{ type: "input_image", image_url: "data:image/png;base64,AA==" }] }),
+    message("assistant", "Old image", { content: [{ type: "input_image", image_url: "data:image/png;base64,AA==" }] }),
     message("assistant", "Old file", { content: [{ type: "input_file", file_id: "file_1" }] }),
     message("assistant", "Ciphertext", { encrypted_content: "opaque" }),
     message("assistant", "Metadata", { metadata: { ciphertext: "opaque" } }),
@@ -192,6 +192,95 @@ test("unsafe unknown, image, file and encrypted archive formats fail closed", ()
     assert.equal(result.folded, false);
     assert.ok(result.reason && result.reason !== "below_threshold");
     assert.deepEqual(payload, before);
+  }
+});
+
+test("old user images and files remain identical native objects in their original order", () => {
+  const input = turns(100);
+  const image = { type: "message", role: "user", id: "old_photo_message", content: [
+    { type: "input_text", text: "Use this original photo", prompt_cache_breakpoint: { mode: "explicit", ttl: "30m" } },
+    { type: "input_image", image_url: "data:image/png;base64,OLD_PHOTO_BYTES", detail: "original" },
+    { type: "input_image", file_id: "file_original_photo", image_url: null, detail: null, prompt_cache_breakpoint: { ttl: "12h" } },
+  ], metadata: { encrypted_content: "media_context_ciphertext" } };
+  const files = { role: "user", id: "old_file_message", content: [
+    { type: "input_file", file_id: "file_reference", file_url: null, filename: null, detail: "high" },
+    { type: "input_file", file_url: "https://example.com/reference.pdf", prompt_cache_breakpoint: null },
+    { type: "input_file", file_data: "OLD_DOCUMENT_BASE64", filename: "reference.pdf" },
+    { type: "input_text", text: "Keep these documents with the task" },
+  ] };
+  input.splice(18, 0, image);
+  input.splice(61, 0, files);
+  input.push(message("user", "Current task"));
+  const result = prepareConversationHistory(freeze({ input }));
+  assert.equal(result.folded, true);
+  assert.equal(result.originalTurns, 100);
+  assert.equal(result.retainedTurns, 36);
+  assert.equal(result.archivedItems, 128);
+  assert.equal(result.payload.input.find((item) => item.id === image.id), image);
+  assert.equal(result.payload.input.find((item) => item.id === files.id), files);
+  assert.ok(result.payload.input.indexOf(image) < result.payload.input.indexOf(files));
+  assert.deepEqual(expand(result.payload.input), input);
+  for (const archive of result.payload.input.filter(isArchive)) {
+    assert.doesNotMatch(archive.content[0].text,
+      /input_image|input_file|image_url|file_data|encrypted_content|OLD_PHOTO_BYTES|OLD_DOCUMENT_BASE64|media_context_ciphertext/);
+  }
+});
+
+test("protected old user media and crossing tool spans do not count as archived items or turns", () => {
+  const input = turns(55);
+  const pair = toolPair("media_span");
+  const image = { role: "user", content: [{ type: "input_image", image_url: "https://example.com/old-photo.png" }] };
+  input.push(pair[0], image, pair[1], ...turns(45), message("user", "Current task"));
+  const result = prepareConversationHistory({ input });
+  assert.equal(result.folded, true);
+  assert.equal(result.originalTurns, 101);
+  assert.equal(result.retainedTurns, 37);
+  assert.equal(result.archivedItems, 128);
+  assert.ok(result.payload.input.includes(pair[0]));
+  assert.ok(result.payload.input.includes(image));
+  assert.ok(result.payload.input.includes(pair[1]));
+  assert.deepEqual(expand(result.payload.input), input);
+});
+
+test("large protected media is not serialized into the bounded text archive", () => {
+  const photo = { role: "user", content: [
+    { type: "input_image", image_url: `data:image/png;base64,${"x".repeat(4 * 1024 * 1024)}` },
+  ] };
+  const input = [photo, ...turns(100), message("user", "Current task")];
+  const result = prepareConversationHistory({ input });
+  assert.equal(result.folded, true);
+  assert.equal(result.payload.input[0], photo);
+  assert.equal(result.archivedItems, 128);
+  assert.deepEqual(expand(result.payload.input), input);
+});
+
+test("unknown user media parts and malformed image or file schemas fail closed", () => {
+  for (const content of [
+    [{ type: "input_image", image_url: "https://example.com/photo.png" }, { type: "unknown_media", data: "opaque" }],
+    [{ type: "input_image", image_url: { url: "https://example.com/photo.png" } }],
+    [{ type: "input_image" }],
+    [{ type: "input_image", image_url: "" }],
+    [{ type: "input_image", image_url: "https://example.com/photo.png", file_id: "file_1" }],
+    [{ type: "input_image", image_url: "https://example.com/photo.png", detail: 2 }],
+    [{ type: "input_image", image_url: "https://example.com/photo.png", prompt_cache_breakpoint: { mode: "unknown" } }],
+    [{ type: "input_image", image_url: "https://example.com/photo.png", prompt_cache_breakpoint: { ttl: "forever" } }],
+    [{ type: "input_image", image_url: "https://example.com/photo.png", mask: "unknown" }],
+    [{ type: "input_file", file_id: { id: "file_1" } }],
+    [{ type: "input_file" }],
+    [{ type: "input_file", file_data: "" }],
+    [{ type: "input_file", file_id: "file_1", file_data: "both_sources" }],
+    [{ type: "input_file", file_data: "document", filename: 7 }],
+    [{ type: "input_file", file_id: "file_1", detail: "unknown" }],
+    [{ type: "input_file", file_id: "file_1", unknown: true }],
+    [{ type: "input_text", text: 7 }, { type: "input_image", file_id: "file_1" }],
+  ]) {
+    const media = { role: "user", content };
+    const payload = { input: [media, ...turns(100), message("user", "Current task")] };
+    const result = prepareConversationHistory(payload);
+    assert.equal(result.folded, false);
+    assert.equal(result.payload, payload);
+    assert.equal(result.reason, "unsupported_message_content");
+    assert.equal(result.archivedItems, 0);
   }
 });
 
