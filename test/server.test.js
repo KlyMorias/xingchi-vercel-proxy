@@ -31,7 +31,7 @@ function store(overrides = {}) {
 }
 
 async function listen(t, options = {}) {
-  const server = createGateway({ store: store(), ...options });
+  const server = createGateway({ store: store(), diagnostics: false, ...options });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   t.after(async () => {
@@ -105,6 +105,85 @@ function imageBody(size) {
   }
   return { length, chunks };
 }
+
+test("production diagnostics observe allowed POST completion without logging request data", async (t) => {
+  process.env.NODE_ENV = "production";
+  const log = t.mock.method(console, "log", () => {});
+  const { port } = await listen(t, { diagnostics: undefined });
+  const forwarded = [];
+  global.fetch = async (_url, options) => {
+    forwarded.push(JSON.parse(options.body).input[0].content[0].text);
+    return new Response(JSON.stringify(terminal()), { headers: { "content-type": "application/json" } });
+  };
+  const body = JSON.stringify({ model: "gpt-6.1-sol", input: "diagnostic-private-body", max_output_tokens: 32 });
+  for (const chunked of [false, true]) {
+    const result = await request(port, { path: "/api/v1/responses?value=diagnostic-private-query", body,
+      ...(chunked ? { chunks: [Buffer.from(body)] } : {}), headers: { "x-real-ip": "203.0.113.90" } });
+    assert.equal(result.status, 200);
+    assert.equal(JSON.parse(result.body).status, "completed");
+  }
+  assert.equal((await request(port, { path: "/healthz", method: "GET", body: "" })).status, 200);
+  assert.equal((await request(port, { method: "OPTIONS", body: "" })).status, 204);
+  assert.equal((await request(port, { path: "/not-allowed", body: "" })).status, 404);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(forwarded, ["diagnostic-private-body", "diagnostic-private-body"]);
+  const rows = log.mock.calls.map((call) => {
+    assert.equal(call.arguments.length, 1);
+    return JSON.parse(call.arguments[0]);
+  });
+  assert.equal(rows.length, 8);
+  const fields = ["scope", "request_id", "stage", "elapsed_ms", "declared_bytes", "chunked", "expect_continue", "status_code"].sort();
+  for (const row of rows) {
+    assert.deepEqual(Object.keys(row).sort(), fields);
+    assert.equal(row.scope, "gateway");
+    assert.ok(Number.isInteger(row.elapsed_ms) && row.elapsed_ms >= 0);
+    assert.equal(row.expect_continue, false);
+  }
+  for (const requestId of [1, 2]) {
+    const lifecycle = rows.filter((row) => row.request_id === requestId);
+    assert.deepEqual(lifecycle.map((row) => row.stage), ["start", "end", "response_finish", "response_close"]);
+    assert.ok(lifecycle.every((row) => row.declared_bytes === (requestId === 1 ? Buffer.byteLength(body) : null)));
+    assert.ok(lifecycle.every((row) => row.chunked === (requestId === 2)));
+    assert.equal(lifecycle.find((row) => row.stage === "response_finish").status_code, 200);
+  }
+  const raw = log.mock.calls.map((call) => call.arguments[0]).join("\n");
+  for (const sensitive of [KEY, "standalone-test-provider-key", "diagnostic-private-body", "diagnostic-private-query", "203.0.113.90", "/api/v1/responses"])
+    assert.equal(raw.includes(sensitive), false);
+});
+
+test("diagnostics can be disabled explicitly in production", async (t) => {
+  process.env.NODE_ENV = "production";
+  const log = t.mock.method(console, "log", () => {});
+  const { port } = await listen(t, { diagnostics: false });
+  global.fetch = async () => new Response(JSON.stringify(terminal()), { headers: { "content-type": "application/json" } });
+  assert.equal((await request(port)).status, 200);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(log.mock.calls.length, 0);
+});
+
+test("diagnostics distinguish an aborted body from a finished response", { timeout: 5000 }, async (t) => {
+  let began, closed;
+  const begun = new Promise((resolve) => { began = resolve; });
+  const responseClosed = new Promise((resolve) => { closed = resolve; });
+  const log = t.mock.method(console, "log", (value) => {
+    const row = JSON.parse(value);
+    if (row.stage === "start") began();
+    if (row.stage === "response_close") closed();
+  });
+  const { port } = await listen(t, { diagnostics: true });
+  global.fetch = async () => assert.fail("an aborted upload must not reach the provider");
+  const client = http.request({ hostname: "127.0.0.1", port, method: "POST", path: "/api/v1/responses", agent: false,
+    headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json", "content-length": "1000" } });
+  client.on("error", () => {});
+  client.write("{");
+  await begun;
+  client.destroy();
+  await responseClosed;
+  const rows = log.mock.calls.map((call) => JSON.parse(call.arguments[0]));
+  assert.deepEqual(rows.map((row) => row.stage), ["start", "aborted", "response_close"]);
+  assert.ok(rows.every((row) => row.request_id === 1 && row.declared_bytes === 1000 && row.chunked === false));
+  assert.equal(log.mock.calls.some((call) => call.arguments[0].includes(KEY)), false);
+});
 
 for (const chunked of [false, true]) {
   test(`a real HTTP ${chunked ? "chunked" : "Content-Length"} upload forwards exactly 50 MiB of valid image JSON`, async (t) => {

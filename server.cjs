@@ -38,13 +38,15 @@ function sendJson(res, status, error) {
 }
 
 function createGateway({ store = keyStore, maxConcurrentRequests = 1, uploadTimeoutMs = 120_000,
-  headersTimeoutMs = 120_000, keepaliveIntervalMs = 8000 } = {}) {
+  headersTimeoutMs = 120_000, keepaliveIntervalMs = 8000,
+  diagnostics = process.env.NODE_ENV === "production" } = {}) {
   positiveInteger(maxConcurrentRequests, "maxConcurrentRequests", 16);
   positiveInteger(uploadTimeoutMs, "uploadTimeoutMs");
   positiveInteger(headersTimeoutMs, "headersTimeoutMs");
   if (typeof store.authenticate !== "function") throw new TypeError("The key store must support read-only authentication");
   const dispatch = createHandler(store, { keepaliveIntervalMs, bodyLimits: GATEWAY_BODY_LIMITS });
   let activeRequests = 0;
+  let requestCounter = 0;
 
   async function handle(req, res, expectContinue = false) {
     res.setHeader("cache-control", "no-store");
@@ -101,6 +103,27 @@ function createGateway({ store = keyStore, maxConcurrentRequests = 1, uploadTime
     }
     req.query = { path: route.path };
     if (req.method === "OPTIONS") { await dispatch(req, res); return; }
+
+    if (diagnostics && req.method === "POST") {
+      const requestId = ++requestCounter;
+      const started = performance.now();
+      const rawLength = req.headers["content-length"];
+      const length = typeof rawLength === "string" && /^\d+$/.test(rawLength) ? Number(rawLength) : NaN;
+      const declaredBytes = Number.isSafeInteger(length) && length >= 0 ? length : null;
+      const transferEncoding = req.headers["transfer-encoding"];
+      const chunked = typeof transferEncoding === "string"
+        && transferEncoding.toLowerCase().split(",").some((value) => value.trim() === "chunked");
+      const trace = (stage) => console.log(JSON.stringify({ scope: "gateway", request_id: requestId, stage,
+        elapsed_ms: Math.round(performance.now() - started), declared_bytes: declaredBytes, chunked,
+        expect_continue: expectContinue === true, status_code: res.headersSent ? res.statusCode : null }));
+      // Lifecycle listeners observe framing and completion without reading body
+      // bytes or changing the incoming stream's flow mode.
+      req.once("end", () => trace("end"));
+      req.once("aborted", () => trace("aborted"));
+      res.once("finish", () => trace("response_finish"));
+      res.once("close", () => trace("response_close"));
+      trace("start");
+    }
 
     const declared = req.headers["content-length"];
     if (typeof declared === "string" && Number(declared) > GATEWAY_BODY_LIMITS.maxWireBytes) {
