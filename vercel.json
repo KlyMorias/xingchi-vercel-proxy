@@ -1,4 +1,20 @@
 {
+  "routes": [
+    {
+      "src": "^/(api/v1|api|v1)/(responses|messages|chat/completions)$",
+      "methods": ["POST"],
+      "has": [{ "type": "header", "key": "content-length", "value": { "gt": 4400000 } }],
+      "headers": { "X-KlyAPI-Ingress": "large" },
+      "dest": "https://klyapi-large-requests.onrender.com/$1/$2"
+    },
+    {
+      "src": "^/(api/v1|api|v1)/(responses|messages|chat/completions)$",
+      "methods": ["POST"],
+      "missing": [{ "type": "header", "key": "content-length" }],
+      "headers": { "X-KlyAPI-Ingress": "large" },
+      "dest": "https://klyapi-large-requests.onrender.com/$1/$2"
+    }
+  ],
   "rewrites": [
     { "source": "/", "destination": "/key.html" },
     { "source": "/key", "destination": "/key.html" },

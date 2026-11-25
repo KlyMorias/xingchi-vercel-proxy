@@ -4,7 +4,9 @@
 
 `server.cjs`, mevcut `api/proxy.js` işleyicisini ayrı Node.js 24 HTTP sunucusunda çalıştırır. Varsayılan sınır **50 MiB = 52.428.800 bayt** olup en az 50 MB hedefini karşılar. Bu değer dosya başına değil, bütün HTTP gövdesi içindir; JSON yapısı, base64 kodlaması, metin ve tüm görseller toplama dahildir. Sıkıştırılmış aktarım ile açılmış JSON ayrı ayrı aynı sınırdan geçer. Sağlayıcının model bağlamı, görsel veya içerik sınırlarını değiştirmez.
 
-Yerel testler tam 50 MiB geçerli görsel JSON'unu hem Content-Length hem chunked HTTP ile mevcut proxy işleyicisinden geçirir. Anahtar/kota ve sağlayıcı bu testlerde kontrollü taklitlerdir; testler gerçek kullanıcı anahtarını veya sağlayıcı bakiyesini kullanmaz. Bu rehber ve Blueprint, harici sunucunun kurulmuş olduğunu veya mevcut üretim adresinin değiştirilmiş olduğunu iddia etmez.
+Harici geçit `https://klyapi-large-requests.onrender.com` adresinde Render Free planıyla kurulmuştur. 25 Kasım 2026 doğrudan canlı doğrulamasında **16/16 kontrol** geçti: tam 50 MiB Content-Length aktarımı `14375 ms`, chunked aktarım `13396 ms` sürdü; küçük gerçek Sol JSON/SSE üretimi ve paylaşılan token kotası da doğrulandı. Bu süreler büyük gövdenin girişten geçiş ölçümüdür; modelin 50 MiB bağlamdan üretim yapabildiğinin garantisi değildir.
+
+Bu durum kaydında Vercel Preview doğrulaması sürmektedir; **mevcut üretim adresinin 50 MiB'a geçtiği henüz doğrulanmamıştır**. Kaynak yapılandırmada aşağıdaki koşullu yönlendirme hazırdır. Yerel testler ayrıca tam 50 MiB geçerli görsel JSON'unu Content-Length ve chunked HTTP ile kontrollü anahtar/kota ve sağlayıcı taklitleri üzerinden geçirir.
 
 ## Vercel'de neden sayı değiştirmek yetmez?
 
@@ -24,7 +26,7 @@ Depodaki `render.yaml`, yalnızca `plan: free` olan bir Node web hizmeti tanıml
 6. Deployment sonrası gerçek `https://...onrender.com/healthz` adresi `{"ok":true}` döndürmelidir. Bu yalnızca sürecin ayakta olduğunu gösterir; doğru Blob/sağlayıcı ayarı için kişisel anahtarla `/v1/models` ve küçük bir model çağrısını da doğrula.
 7. Önce doğrudan Render adresinde, sonra Vercel Preview üzerinden aşağıdaki 50 MiB taşıma testini çalıştır. Ancak ikisi geçince üretim yönlendirmesi değiştirilebilir.
 
-Render Free, 15 dakika trafik gelmezse uyur; tekrar açılış yaklaşık bir dakika sürebilir. Workspace başına ayda 750 ücretsiz instance saati vardır. Bant genişliği ve build dakikaları da aylık kotaya tabidir. Ödeme yöntemi yokken aşım hizmeti/build'leri durdurabilir; mevcut ödeme yönteminin ek kullanım ücretleriyle ilişkisini Dashboard'da kontrol et. Render bu planı hobi ve deneme kullanımı için sunar. [Render Free sınırları](https://render.com/docs/free)
+Render Free, 15 dakika trafik gelmezse uyur; tekrar açılış yaklaşık bir dakika, bazen 50 saniye veya daha fazla gecikme ekleyebilir. Bu nedenle normal boyutlu istekler Vercel'de tutulur; büyük veya uzunluğu bilinmeyen isteklerde ücretsiz sunucunun soğuk başlangıcı tamamen kaldırılamaz. Workspace başına ayda 750 ücretsiz instance saati vardır. Bant genişliği ve build dakikaları da aylık kotaya tabidir. Ödeme yöntemi yokken aşım hizmeti/build'leri durdurabilir; mevcut ödeme yönteminin ek kullanım ücretleriyle ilişkisini Dashboard'da kontrol et. Render bu planı hobi ve deneme kullanımı için sunar. [Render Free sınırları](https://render.com/docs/free)
 
 512 MB bellekte aynı anda bir büyük istek işlenir; ikincisi `503` ve `Retry-After: 2` alır. Büyük gövdelerden sonra ve upstream için yeniden serileştirmeden önce kontrollü bellek toplama yapılır. Yerel Windows/Node ölçümünde 50 MiB metin gövdesi, iki baytlık JavaScript dizesini tetikleyen tek CJK karakteri ve sağlayıcı aktarım kopyasıyla yaklaşık 359 MiB en yüksek RSS görüldü. Bu ölçüm Render/Linux garantisi değildir; gerçek hizmette bellek, yeniden başlama ve 413/503 oranları ayrıca izlenmelidir. Ücretsiz plan için eşzamanlılık artırılmamalıdır.
 
@@ -59,18 +61,20 @@ Bu testin başarılı olması modelin 50 MiB içerikten üretim yapabildiğini g
 
 ## Mevcut Vercel adresini korumak
 
-`vercel.json` bu hazırlıkta değiştirilmez. Harici hizmetin gerçek URL'si ve Preview testi hazır olunca yalnızca aşağıdaki API alias'larının **mevcut** destination değerleri değiştirilir:
+OpenAI Base URL `https://klyapi.vercel.app/api/v1`, Anthropic Base URL `https://klyapi.vercel.app/api` olarak kalır. İstemcide adres veya mevcut kişisel API anahtarı değişikliği gerekmez. `vercel.json`, mevcut `rewrites` listesini koruyarak iki POST koşulu ekler; hedef `https://klyapi-large-requests.onrender.com` üzerinde aynı yoldur:
 
-| İşlem | Kaynak yollar |
+| İstek | Çalıştığı yer |
 | --- | --- |
-| Modeller | `/v1/models`, `/api/models`, `/api/v1/models` |
-| Responses | `/v1/responses`, `/api/responses`, `/api/v1/responses` |
-| Chat Completions | `/v1/chat/completions`, `/api/chat/completions`, `/api/v1/chat/completions` |
-| Messages | `/v1/messages`, `/api/messages`, `/api/v1/messages` |
+| POST, `Content-Length > 4400000` | Render büyük istek geçidi |
+| POST, `Content-Length` yok; örneğin chunked | Render büyük istek geçidi |
+| POST, bilinen `Content-Length ≤ 4400000` | Mevcut Vercel işlevi |
+| Model listesi ve OPTIONS | Mevcut Vercel işlevi |
 
-Örneğin `/api/v1/responses`, gerçek Render origin'inde `/api/v1/responses` yoluna harici rewrite yapılır. Statik panel, login, `/api/account`, `/api/keys`, `/api/users`, `/api/auth` ve durum yolları Vercel'de kalır. Bütün `/api/*` yollarını dışarı aktaran catch-all eklenmez. Eski eşleşen rewrite'ı önde bırakıp ikinci kural eklemek de işe yaramaz: ilk eşleşme kullanılabilir.
+Harici kurallar yalnızca `/api`, `/v1`, `/api/v1` önekleri altındaki `responses`, `messages`, `chat/completions` yollarına uygulanır; toplam dokuz üretim alias'ı vardır. Kaynak regex'i `^/(api/v1|api|v1)/(responses|messages|chat/completions)$`, yöntem yalnızca `POST`'tur. Sayısal `has` koşulu `content-length` için `{ "gt": 4400000 }`; ikinci kural bu başlığın eksikliğini denetler. Kural yanıtında **`X-KlyAPI-Ingress: large`** başlığı görülür. Bu işaret bilinen küçük isteklerde, model listesinde veya OPTIONS yanıtında bulunmamalıdır.
 
-Preview'da sağlık, 50 MiB taşıma, normal kişisel anahtar, küçük gerçek üretim, SSE'nin ilk olayının tamamlanmadan ulaşması ve uzun yanıt kontrol edilir. Sonra üretim yayımlanır. Geri dönüş, bu alias'ların önceki yerel destination değerlerini geri yüklemektir.
+Statik panel, login, `/api/account`, `/api/keys`, `/api/users`, `/api/auth` ve durum yolları Vercel'de kalır. Bütün `/api/*` yollarını dışarı aktaran catch-all yoktur. Böylece küçük istekler Render'ın uykusuna veya tek büyük istek yuvasına bağlanmaz. Uzunluğu bilinmeyen küçük POST'lar da güvenli boyut denetimi için Render'a gider; bilinen küçük gövde yolunun hız avantajı bu çağrılar için geçerli değildir.
+
+Vercel'in güncel yapılandırması `routes` ile `rewrites` kullanımını ve sayısal başlık koşullarını destekler; yerel `vercel dev` koşullu eşleşmeyi doğrulamaz. Preview'da gerçek yönlendirme, tam `4400000` / `4400001` bayt sınırı, 50 MiB Content-Length/chunked, model listesi, OPTIONS, kişisel anahtar, küçük gerçek üretim ve SSE'nin ilk olayının tamamlanmadan ulaşması kontrol edilir. Ancak bu kontroller geçince üretim yayımlanır. Geri dönüş, eklenen iki harici `routes` kuralını kaldırmaktır; mevcut yerel rewrite listesi zaten korunur. [Vercel koşullu yönlendirme yapılandırması](https://vercel.com/docs/project-configuration/vercel-json)
 
 ## Yerel ve Docker çalıştırma
 
@@ -94,13 +98,13 @@ Docker bağlamı `.dockerignore` ile izin verilen uygulama dosyalarıyla sınır
 
 ## Ek korumalar ve doğrulama
 
-Geçit, büyük gövde okunmadan kişisel anahtarı depo üzerinden salt okunur biçimde doğrular; üretim rezervasyonu yükleme bittikten sonra yeniden yetki kontrolü yapar. Gövdeler günlük dosyasına veya diske yazılmaz. İstemcinin sağladığı `x-vercel-forwarded-for`, `x-forwarded-for` ve `x-real-ip` kaldırılır; proxy gerçek socket IP'sini kullanır. Başlık süresi 15 saniye, toplam yükleme süresi 120 saniyedir. İstemci kopunca upstream iptal edilir. Boyut aşımında soketi hata gövdesinden önce yok etmek yerine JSON 413 gönderilip bağlantı kapatılır.
+Geçit, büyük gövde okunmadan kişisel anahtarı depo üzerinden salt okunur biçimde doğrular; üretim rezervasyonu yükleme bittikten sonra yeniden yetki kontrolü yapar. Gövdeler günlük dosyasına veya diske yazılmaz. İstemcinin sağladığı `x-vercel-forwarded-for`, `x-forwarded-for` ve `x-real-ip` kaldırılır; proxy gerçek socket IP'sini kullanır. Başlık ve toplam yükleme süresi 120 saniyeyle sınırlıdır. Keep-alive 120 saniyedir; Render kenar vekilinin bağlantıyı yeniden kullanırken kapanmış bir Node soketine denk gelmesini önlemek için platformun önerilen ayarı uygulanır. İstemci kopunca upstream iptal edilir. Boyut aşımında soketi hata gövdesinden önce yok etmek yerine JSON 413 gönderilip bağlantı kapatılır.
 
 Yalnızca harici geçitte JSON derinliği 128, tırnak dışındaki yapısal öğe sayısı 100.000 ile sınırlıdır. Bu sınır büyük base64 metnini küçültmez; milyonlarca küçük nesnenin 50 MiB içinde aşırı heap oluşturmasını önler. Karmaşıklık ihlali `400` verir. Paylaşılan Vercel işlevinin mevcut JSON yapısı davranışı değiştirilmez.
 
 ```sh
-node --test test/server.test.js test/request-body.test.js test/request-complexity.test.js
+node --test test/server.test.js test/request-body.test.js test/request-complexity.test.js test/large-request-routing.test.js
 npm test
 ```
 
-Testler gerçek HTTP 50 MiB Content-Length/chunked girişini, fazla baytta okunabilir 413'ü, tam yol listesini, başarısız anahtarları, eşzamanlılık sınırını, SSE'nin kademeli ulaşmasını, istemci kopuşunda iptali ve süre sınırlarını kapsar. Dış hesap bağlantısı olmadan yalnızca bu yerel kontroller tamamlanabilir; canlı Render/Vercel Preview testi ayrı bir deployment adımıdır.
+Yerel testler gerçek HTTP 50 MiB Content-Length/chunked girişini, fazla baytta okunabilir 413'ü, tam yol listesini, başarısız anahtarları, eşzamanlılık sınırını, SSE'nin kademeli ulaşmasını, istemci kopuşunda iptali ve süre sınırlarını kapsar. Yapılandırma regresyonu dokuz alias'ın doğru harici yola çevrildiğini, küçük istek fallback'lerinin kaldığını ve panel/hesap/model yollarının harici regex'e girmediğini denetler. Doğrudan Render canlı kontrolleri ayrıca tamamlanmıştır; Vercel Preview ve üretim doğrulaması ayrı deployment adımlarıdır.

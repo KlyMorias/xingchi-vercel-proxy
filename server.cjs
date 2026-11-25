@@ -38,7 +38,7 @@ function sendJson(res, status, error) {
 }
 
 function createGateway({ store = keyStore, maxConcurrentRequests = 1, uploadTimeoutMs = 120_000,
-  headersTimeoutMs = 15_000, keepaliveIntervalMs = 8000 } = {}) {
+  headersTimeoutMs = 120_000, keepaliveIntervalMs = 8000 } = {}) {
   positiveInteger(maxConcurrentRequests, "maxConcurrentRequests", 16);
   positiveInteger(uploadTimeoutMs, "uploadTimeoutMs");
   positiveInteger(headersTimeoutMs, "headersTimeoutMs");
@@ -159,7 +159,9 @@ function createGateway({ store = keyStore, maxConcurrentRequests = 1, uploadTime
     headersTimeout: Math.min(headersTimeoutMs, uploadTimeoutMs),
     requestTimeout: uploadTimeoutMs,
     connectionsCheckingInterval: Math.min(1000, uploadTimeoutMs),
-    keepAliveTimeout: 5000,
+    // Render's edge reuses idle connections for up to 75 seconds. Keep Node's
+    // connection alive longer so the edge does not reuse a closed socket.
+    keepAliveTimeout: 120_000,
   }, listener);
   server.on("checkContinue", (req, res) => listener(req, res, true));
   server.maxRequestsPerSocket = 1000;

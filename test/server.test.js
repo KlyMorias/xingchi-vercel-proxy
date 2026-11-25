@@ -41,6 +41,13 @@ async function listen(t, options = {}) {
   return { server, port: server.address().port };
 }
 
+test("gateway timeouts accommodate Render's reverse-proxy connection reuse", () => {
+  const server = createGateway({ store: store() });
+  assert.equal(server.keepAliveTimeout, 120_000);
+  assert.equal(server.headersTimeout, 120_000);
+  assert.equal(server.requestTimeout, 120_000);
+});
+
 function request(port, { path = "/api/v1/responses", method = "POST", headers = {}, body,
   chunks, onData } = {}) {
   const data = body === undefined ? Buffer.from('{"model":"gpt-6.1-sol","input":"hello","max_output_tokens":32}') : Buffer.from(body);
