@@ -9,7 +9,7 @@ function seed() {
     hourly_limit: 20, daily_limit: 50, weekly_limit: 200, requests_per_minute: 5 }, bob: { id: "user-bob", username: "bob", role: "user", enabled: true,
     hourly_limit: 20, daily_limit: 50, weekly_limit: 200, requests_per_minute: 5 } }, sessions: {}, keys: {}, usage: {}, reservations: {}, login_attempts: {} };
 }
-function fixture() {
+function fixture(context) {
   let state = seed();
   let version = 0;
   let now = Math.floor(Date.now() / 1000);
@@ -32,6 +32,8 @@ function fixture() {
     },
   };
   const storage = createStateStore(client, { attempts: 30, pause: async () => {} });
+  // Capture real operation deadlines above; cleanup follows the simulated clock.
+  context?.mock.method(Date, "now", () => now * 1000);
   return { store: createKeyStore(storage, { now: () => now }), state: () => state,
     change(callback) { callback(state); version++; }, setNow(value) { now = value; } };
 }
@@ -103,8 +105,8 @@ test("hourly and weekly caps are enforced on billable calls while model lists pr
   assert.equal(weekly.state().usage["user-alice"].used_this_week, 2);
 });
 
-test("hour, day and Monday-based week usage reset and old refunds do not touch new windows", async () => {
-  const f = fixture();
+test("hour, day and Monday-based week usage reset and old refunds do not touch new windows", async (context) => {
+  const f = fixture(context);
   const monday = Math.floor(Date.parse("2026-11-16T00:10:00Z") / 1000);
   f.setNow(monday);
   const { api_key } = await f.store.createKey("user-alice");

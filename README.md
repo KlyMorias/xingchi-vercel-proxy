@@ -7,6 +7,7 @@ Vercel'de çalışan, yalnızca yöneticinin eklediği hesaplara açık API pane
 - `/login`: kullanıcı adı ve parola ile giriş. Herkese açık kayıt yoktur.
 - `/key`: kişisel API anahtarı oluşturma, kopyalama, yenileme ve iptal.
 - Panelde **Modeller**: aktif model kataloğunu ve desteklenen API yollarını gör.
+- Panelde **Deneme alanı**: kişisel anahtarınla gerçek model yanıtını akış halinde izle; ilk metin, toplam süre ve çıktı token sayısını gör. Anahtar tarayıcıya kaydedilmez. Deneme modülü yalnızca bu sekme açıldığında yüklenir.
 - Panelde **Kullanıcılar**: yönetici kullanıcı ekler, hesabı kapatır, parola sıfırlar ve dakika/saat/gün/hafta kotalarını ayarlar.
 - Panelde **Şifre değiştir**: mevcut kullanıcı kendi parolasını değiştirir.
 - OpenAI Base URL: `https://klyapi.vercel.app/api/v1`
@@ -67,6 +68,8 @@ Başlangıç yönetici bilgileri kaynak kodunda bulunmaz. İlk veri oluşturuldu
 Modelin çıktı sınırını upstream belirler. Proxy, açıkça verilen token limitlerine varsayılan bir tavan uygulamaz. Yönetici tavanı tanımlıysa, limitsiz istekler için varsayılan da bu tavana indirilir. Token ortam değişkenleri pozitif tam sayı olmalıdır; hatalı yapılandırma 503 döndürür.
 
 Eşzamanlı kota yazımları ETag ile korunur. Depodan gelen hem ETag uyuşmazlığı hem de açıkça reddedilen koşullu yazma çakışması, güncel veri yeniden okunarak tekrar denenir; belirsiz ağ hatalarında yazma körlemesine tekrarlanmaz.
+
+Blob SDK'nin kendi otomatik tekrarları kapalıdır; sınırlı okuma ve açık hız sınırı tekrarlarını depolama katmanı yönetir. Yazma yanıtı kaybolursa, iki saniyelik ayrı bir okuma bütçesi içinde hem benzersiz `commit_id` hem de tam veri karşılaştırılarak işlemin tamamlandığı doğrulanabilir. Eşleşme yoksa işlem 503 ile kapanır; kota veya oturum işlemi yeniden uygulanmaz. Girişte hız sınırı kontrolünden alınan özel kullanıcı özeti tekrar kullanılarak başarılı girişin depolama işlemleri beşten dörde indirilmiştir.
 
 ## İstemci uyumluluğu
 

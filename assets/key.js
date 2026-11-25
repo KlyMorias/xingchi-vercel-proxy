@@ -9,20 +9,61 @@
   let refreshTimer;
   let countdownTimer;
   let commandIndex = 0;
+  let playground;
+  let playgroundPromise;
+  let suspended = false;
+  let lifecycleRevision = 0;
+  let identityRevision = 0;
+  let authenticationPromise;
+  let authenticationRevision = 0;
+  let usersRequestRevision = 0;
+  const requestControllers = new Set();
   const AUTO_REFRESH_MS = 60000;
   const USER_CACHE_MS = 30000;
   const MODEL_NAMES = Object.freeze({ "gpt-6.1-sol": "GPT 6.1 Sol", "gpt-6-astra": "GPT 6 Astra" });
   let modelCatalogSignature = "";
   let modelCatalog = [];
 
-  const formattedNumber = (number) => new Intl.NumberFormat("tr-TR").format(number);
+  const numberFormatter = new Intl.NumberFormat("tr-TR");
+  const dateFormatter = new Intl.DateTimeFormat("tr-TR", { day: "numeric", month: "long", year: "numeric" });
+  const formattedNumber = (number) => numberFormatter.format(number);
   const safeNumber = (value, fallback) => Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : fallback;
   const dateLabel = (value) => {
     if (!value) return "";
     const date = new Date(value);
     if (!Number.isFinite(date.getTime())) return "";
-    return new Intl.DateTimeFormat("tr-TR", { day: "numeric", month: "long", year: "numeric" }).format(date);
+    return dateFormatter.format(date);
   };
+
+  function clearSensitiveKey() {
+    state.secret = null;
+    state.revealed = false;
+    playground?.clearKey?.();
+  }
+
+  function synchronizeUser(user) {
+    if (!user || typeof user.username !== "string") return;
+    const changed = state.user && (state.user.username.toLowerCase() !== user.username.toLowerCase()
+      || state.user.role !== user.role);
+    if (changed) {
+      identityRevision++;
+      clearSensitiveKey();
+      state.users = [];
+      state.usersLoadedAt = 0;
+      byId("user-list").replaceChildren();
+      byId("users-count").textContent = "—";
+      byId("user-match-count").textContent = "";
+      for (const id of ["user-dialog", "password-dialog", "command-dialog"]) {
+        if (byId(id).open) byId(id).close();
+      }
+    }
+    state.user = user;
+    for (const id of ["sidebar-user", "account-name"]) byId(id).textContent = user.username;
+    for (const id of ["sidebar-avatar", "account-avatar"]) byId(id).textContent = user.username.slice(0, 1).toUpperCase();
+    byId("sidebar-role").textContent = user.role === "admin" ? "Yönetici" : "Kullanıcı";
+    byId("nav-users").hidden = user.role !== "admin";
+    if (state.view === "users" && user.role !== "admin") selectView("overview", { historyMode: "replace", focus: false });
+  }
 
   function announce(message, success = false) {
     const box = byId("message-box");
@@ -30,6 +71,7 @@
     box.classList.toggle("success", success);
     box.setAttribute("role", success ? "status" : "alert");
     box.hidden = false;
+    if (state.view !== "overview") toast(message);
   }
 
   function clearMessage() {
@@ -91,9 +133,9 @@
   function renderService(service) {
     const available = service?.generation_available === true;
     byId("service-notice").classList.toggle("available", available);
-    byId("service-title").textContent = available ? "Model erişimi açık" : "Üretim erişimi bekleniyor";
-    byId("service-message").textContent = service?.message || "Model erişimi kontrol ediliyor.";
-    byId("service-tag").textContent = available ? "Kullanılabilir" : "Sağlayıcı kısıtlaması";
+    byId("service-title").textContent = available ? "API bağlantısı yapılandırıldı" : "Sunucu ayarı bekleniyor";
+    byId("service-message").textContent = service?.message || "Model yanıtını deneme alanından kontrol edebilirsin.";
+    byId("service-tag").textContent = available ? "Tanımlı" : "Bekleniyor";
   }
 
   function renderModels(service) {
@@ -124,7 +166,7 @@
         identity.append(element("span", "model-status", "API kataloğu"), element("h2", "", MODEL_NAMES[id]), element("p", "", id));
         heading.append(identity, element("span", `outline-badge ${needsBalance ? "warning" : "active"}`, needsBalance ? "Bakiye gerekli" : "Sunuluyor"));
         const details = element("div", "model-catalog-meta");
-        for (const [label, value] of [["API yolu", "/api/v1/responses"], ["Uyumluluk", "Responses · Chat Completions"], ["Model kimliği", id]]) {
+        for (const [label, value] of [["API yolu", "/api/v1/responses"], ["Uyumluluk", "Responses · Chat Completions"]]) {
           const item = element("div");
           item.append(element("span", "", label), element("code", "", value));
           details.append(item);
@@ -145,6 +187,7 @@
     byId("setup-selected-model").textContent = state.model;
     byId("model-id").value = state.model;
     updateModelNote();
+    playground?.setModels?.(modelCatalog);
   }
 
   function updateModelNote() {
@@ -165,10 +208,12 @@
   }
 
   function render(data) {
-    if (!data.key || (state.key && state.key.prefix !== data.key.prefix)) {
-      state.secret = null;
-      state.revealed = false;
-    }
+    synchronizeUser(data.user);
+    const keyChanged = state.key && data.key && ["prefix", "created_at", "expires_at"]
+      .some((field) => state.key[field] !== data.key[field]);
+    const secretMismatch = state.secret && data.key && (typeof data.key.prefix !== "string"
+      || !state.secret.startsWith(data.key.prefix));
+    if (!data.key || keyChanged || secretMismatch) clearSensitiveKey();
     state.key = data.key || null;
     state.daily = safeNumber(data.limits?.daily_requests ?? data.key?.daily_limit, 50);
     state.hourly = safeNumber(data.limits?.hourly_requests ?? data.key?.hourly_limit, 20);
@@ -259,7 +304,7 @@
   function scheduleRefresh() {
     clearTimeout(refreshTimer);
     clearInterval(countdownTimer);
-    if (document.hidden || state.view !== "overview" || !state.user || !state.loaded) return;
+    if (suspended || document.hidden || state.view !== "overview" || !state.user || !state.loaded) return;
     countdownTimer = setInterval(updateUsageClock, 15000);
     const delay = Math.max(1000, AUTO_REFRESH_MS - (Date.now() - state.lastRefreshAttempt));
     refreshTimer = setTimeout(() => refresh({ background: true }), delay);
@@ -270,7 +315,11 @@
   }
 
   async function api(url, method = "GET", payload) {
+    if (suspended) throw Object.assign(new Error("Sayfa artık etkin değil."), { code: "page_inactive" });
+    const revision = lifecycleRevision;
+    const identity = identityRevision;
     const controller = new AbortController();
+    requestControllers.add(controller);
     const timeout = setTimeout(() => controller.abort(), 20000);
     try {
     const response = await fetch(url, {
@@ -281,10 +330,14 @@
       headers: method === "GET" ? { Accept: "application/json" } : { Accept: "application/json", "Content-Type": "application/json" },
       ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
     });
+    if (revision !== lifecycleRevision || identity !== identityRevision) throw Object.assign(new Error("Oturum değişti."), { code: "page_inactive" });
     if (response.status === 401 && url !== "/api/auth") {
       state.user = null;
-      state.secret = null;
-      state.revealed = false;
+      identityRevision++;
+      clearSensitiveKey();
+      state.users = [];
+      state.usersLoadedAt = 0;
+      byId("user-list").replaceChildren();
       if (state.key) renderSecret();
       updateExample();
       scheduleRefresh();
@@ -294,6 +347,7 @@
     if (response.status === 204) return null;
     let body;
     try { body = await response.json(); } catch { throw new Error("Sunucudan geçerli bir yanıt alınamadı. Biraz sonra yeniden dene."); }
+    if (revision !== lifecycleRevision || identity !== identityRevision) throw Object.assign(new Error("Oturum değişti."), { code: "page_inactive" });
     if (!response.ok) {
       const detail = typeof body.error === "string" ? body.error : body.error?.message;
       const retryAfter = Number(response.headers.get("Retry-After"));
@@ -305,12 +359,14 @@
     }
     return body;
     } catch (error) {
+      if (suspended || revision !== lifecycleRevision) throw Object.assign(new Error("İşlem sayfadan ayrıldığın için durduruldu."), { code: "page_inactive" });
       if (controller.signal.aborted) throw new Error("Sunucu yanıtı gecikti. Yeniden deneyebilirsin.");
       throw error;
-    } finally { clearTimeout(timeout); }
+    } finally { clearTimeout(timeout); requestControllers.delete(controller); }
   }
 
   async function refresh({ background = false, allowBusy = false } = {}) {
+    if (suspended) return;
     if (refreshPromise) return refreshPromise;
     if (state.busy && !allowBusy) { scheduleRefresh(); return; }
     state.lastRefreshAttempt = Date.now();
@@ -322,6 +378,7 @@
       const data = await api("/api/account");
       render(data);
     } catch (error) {
+      if (error.code === "page_inactive") return;
       if (state.loaded) {
         state.stale = true;
         updateUsageClock();
@@ -355,7 +412,7 @@
 
   async function createKey() {
     if (refreshPromise) await refreshPromise;
-    if (state.busy || !state.loaded) return;
+    if (suspended || !state.user || state.busy || !state.loaded) return;
     clearMessage();
     setBusy(true);
     try {
@@ -365,7 +422,7 @@
       render(data);
       announce("Anahtarın oluşturuldu. Tam anahtarını aşağıdaki kopyalama düğmesiyle kaydet.", true);
     } catch (error) {
-      announce(error.message);
+      if (error.code !== "page_inactive") announce(error.message);
     } finally {
       setBusy(false);
     }
@@ -373,7 +430,7 @@
 
   async function revokeKey(rotate = false) {
     if (refreshPromise) await refreshPromise;
-    if (state.busy || !state.key) return;
+    if (suspended || !state.user || state.busy || !state.key) return;
     const prompt = rotate
       ? "Mevcut anahtar iptal edilip yenisi oluşturulacak. Eski anahtarı kullanan uygulamaları yeni anahtarla güncellemen gerekecek. Devam edilsin mi?"
       : "Bu API anahtarı iptal edilecek ve onu kullanan uygulamalar erişimini kaybedecek. Devam edilsin mi?";
@@ -383,8 +440,7 @@
     try {
       await request("DELETE");
       state.key = null;
-      state.secret = null;
-      state.revealed = false;
+      clearSensitiveKey();
       updateExample();
       if (rotate) {
         const data = await request("POST");
@@ -396,6 +452,7 @@
         announce("Anahtarın iptal edildi.", true);
       }
     } catch (error) {
+      if (error.code === "page_inactive") return;
       await refresh({ allowBusy: true });
       announce(error.message);
     } finally {
@@ -451,64 +508,98 @@
   function viewFromHash() {
     const hash = window.location.hash.toLowerCase();
     if (hash === "#models") return "models";
+    if (hash === "#playground") return "playground";
     if (hash === "#users") return "users";
     if (["#setup", "#codex-setup", "#baslarken"].includes(hash)) return "setup";
     return "overview";
   }
 
   function selectView(view, { historyMode = "push", focus = true } = {}) {
-    if (!["overview", "models", "setup", "users"].includes(view)) view = "overview";
+    if (!["overview", "models", "setup", "users", "playground"].includes(view)) view = "overview";
     if (view === "users" && state.user?.role !== "admin") view = "overview";
     const changed = state.view !== view;
     state.view = view;
     const users = view === "users";
     const models = view === "models";
     const setup = view === "setup";
-    byId("overview-view").hidden = users || models || setup;
+    const testing = view === "playground";
+    byId("overview-view").hidden = users || models || setup || testing;
     byId("models-view").hidden = !models;
     byId("users-view").hidden = !users;
     byId("setup-view").hidden = !setup;
-    byId("nav-overview").classList.toggle("current", !users && !models && !setup);
+    if (byId("playground-view")) byId("playground-view").hidden = !testing;
+    byId("nav-overview").classList.toggle("current", !users && !models && !setup && !testing);
     byId("nav-models").classList.toggle("current", models);
     byId("nav-start").classList.toggle("current", setup);
     byId("nav-users").classList.toggle("current", users);
-    for (const [id, active] of [["nav-overview", view === "overview"], ["nav-models", models], ["nav-start", setup], ["nav-users", users]]) {
+    byId("nav-playground")?.classList.toggle("current", testing);
+    for (const [id, active] of [["nav-overview", view === "overview"], ["nav-models", models], ["nav-start", setup], ["nav-users", users], ["nav-playground", testing]]) {
+      if (!byId(id)) continue;
       if (active) byId(id).setAttribute("aria-current", "page");
       else byId(id).removeAttribute("aria-current");
     }
-    byId("breadcrumb-page").textContent = users ? "Kullanıcılar" : models ? "Modeller" : setup ? "Kurulum" : "Genel bakış";
-    document.title = `${users ? "Kullanıcılar" : models ? "Modeller" : setup ? "Kurulum" : "API Anahtarın"} · KlyAPI`;
+    byId("breadcrumb-page").textContent = users ? "Kullanıcılar" : models ? "Modeller" : setup ? "Kurulum" : testing ? "Deneme alanı" : "Genel bakış";
+    document.title = `${users ? "Kullanıcılar" : models ? "Modeller" : setup ? "Kurulum" : testing ? "Deneme alanı" : "API Anahtarın"} · KlyAPI`;
     const hash = `#${view}`;
     if (historyMode !== "none" && window.location.hash !== hash) window.history[historyMode === "replace" ? "replaceState" : "pushState"](null, "", hash);
     if (changed && focus) {
-      const heading = byId(users ? "users-title" : models ? "models-title" : setup ? "start-heading" : "page-title");
-      heading.tabIndex = -1;
-      heading.focus({ preventScroll: true });
+      const heading = byId(users ? "users-title" : models ? "models-title" : setup ? "start-heading" : testing ? "playground-title" : "page-title");
+      if (heading) { heading.tabIndex = -1; heading.focus({ preventScroll: true }); }
       window.scrollTo({ top: 0, behavior: "instant" });
     }
     if (users) loadUsers();
+    if (testing) ensurePlayground();
     scheduleRefresh();
   }
 
+  function ensurePlayground() {
+    if (playground || playgroundPromise || suspended) return;
+    const initialize = () => {
+      if (suspended || playground) return;
+      playground = window.KlyPlayground?.init?.({ getKey: () => state.secret, getModels: () => modelCatalog,
+        onComplete: () => { if (!suspended && state.user) refresh({ background: true }); }, onAnnounce: toast });
+      playground?.setModels?.(modelCatalog);
+    };
+    if (window.KlyPlayground?.init) { initialize(); return; }
+    const moduleSource = byId("playground-view")?.dataset.module;
+    if (!moduleSource) return;
+    byId("playground-send").disabled = true;
+    byId("playground-status").textContent = "Deneme alanı yükleniyor…";
+    playgroundPromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = moduleSource;
+      script.onload = resolve;
+      script.onerror = () => { script.remove(); reject(new Error("Deneme alanı yüklenemedi. Sekmeyi yeniden açarak deneyebilirsin.")); };
+      document.head.append(script);
+    }).then(initialize).catch((error) => {
+      if (suspended) return;
+      byId("playground-status").textContent = "Yüklenemedi";
+      byId("playground-error").textContent = error.message;
+      byId("playground-error").hidden = false;
+    }).finally(() => { playgroundPromise = null; });
+  }
+
   async function authenticate() {
+    if (authenticationPromise && authenticationRevision === lifecycleRevision) return authenticationPromise;
     byId("retry-auth").hidden = true;
+    authenticationRevision = lifecycleRevision;
+    const pending = (async () => {
     try {
       const data = await api("/api/account");
       if (!data.user) { window.location.replace("/login"); return; }
-      state.user = data.user;
-      for (const id of ["sidebar-user", "account-name"]) byId(id).textContent = data.user.username;
-      for (const id of ["sidebar-avatar", "account-avatar"]) byId(id).textContent = data.user.username.slice(0, 1).toUpperCase();
-      byId("sidebar-role").textContent = data.user.role === "admin" ? "Yönetici" : "Kullanıcı";
-      byId("nav-users").hidden = data.user.role !== "admin";
       byId("auth-cover").hidden = true;
       document.body.classList.remove("auth-pending");
       render(data);
       selectView(viewFromHash(), { historyMode: "replace", focus: false });
     } catch (error) {
+      if (error.code === "page_inactive") return;
       if (error.status === 401) { window.location.replace("/login"); return; }
       byId("auth-status").textContent = "Oturum bilgisi alınamadı. Yeniden deneyebilirsin.";
       byId("retry-auth").hidden = false;
-    }
+    } finally { if (authenticationPromise === pending) authenticationPromise = null; }
+    })();
+    authenticationPromise = pending;
+    return pending;
   }
 
   function element(tag, className, text) {
@@ -518,10 +609,11 @@
     return node;
   }
 
-  function actionButton(label, action, disabled = false) {
+  function actionButton(label, action, disabled = false, username) {
     const button = element("button", "button subtle", label);
     button.type = "button";
     button.disabled = disabled;
+    if (username) button.setAttribute("aria-label", `${username}: ${label}`);
     button.addEventListener("click", action);
     return button;
   }
@@ -552,9 +644,9 @@
       status.append(element("span"), document.createTextNode(user.enabled ? "Aktif" : "Kapalı"));
       const own = user.username.toLowerCase() === state.user.username.toLowerCase();
       const actions = element("div", "user-actions");
-      actions.append(actionButton("Kotalar", () => openUserDialog("quota", user)),
-        actionButton("Şifre sıfırla", () => openUserDialog("password", user), own),
-        actionButton(user.enabled ? "Erişimi kapat" : "Erişimi aç", () => toggleUser(user), user.role === "admin" || own));
+      actions.append(actionButton("Kotalar", () => openUserDialog("quota", user), false, user.username),
+        actionButton("Şifre sıfırla", () => openUserDialog("password", user), own, user.username),
+        actionButton(user.enabled ? "Erişimi kapat" : "Erişimi aç", () => toggleUser(user), user.role === "admin" || own, user.username));
       row.append(identity, limits, status, actions);
       fragment.append(row);
     }
@@ -562,22 +654,27 @@
   }
 
   async function loadUsers({ force = false } = {}) {
-    if (state.user?.role !== "admin") return;
+    if (suspended || state.user?.role !== "admin") return;
     if (usersPromise) {
+      const revision = usersRequestRevision;
       await usersPromise;
-      if (!force) return;
+      if (suspended || state.user?.role !== "admin") return;
+      if (!force && revision === identityRevision) return;
     }
     if (!force && state.usersLoadedAt && Date.now() - state.usersLoadedAt < USER_CACHE_MS) { renderUsers(); return; }
     byId("users-message").hidden = true;
     byId("users-loading").hidden = Boolean(state.usersLoadedAt);
     byId("refresh-users").disabled = true;
+    const revision = identityRevision;
+    usersRequestRevision = revision;
     usersPromise = (async () => {
     try {
       const data = await api("/api/users");
+      if (suspended || revision !== identityRevision || state.user?.role !== "admin") return;
       state.users = Array.isArray(data.users) ? data.users : [];
       state.usersLoadedAt = Date.now();
       renderUsers();
-    } catch (error) { showFormMessage("users-message", error.message); }
+    } catch (error) { if (error.code !== "page_inactive" && revision === identityRevision) showFormMessage("users-message", error.message); }
     finally { byId("users-loading").hidden = true; byId("refresh-users").disabled = false; usersPromise = null; }
     })();
     return usersPromise;
@@ -665,8 +762,11 @@
     try {
       await api("/api/auth", "POST", { action: "logout" });
       state.user = null;
-      state.secret = null;
-      state.revealed = false;
+      identityRevision++;
+      clearSensitiveKey();
+      state.users = [];
+      state.usersLoadedAt = 0;
+      byId("user-list").replaceChildren();
       if (state.key) renderSecret();
       updateExample();
       scheduleRefresh();
@@ -677,6 +777,7 @@
   const commandViews = [
     { view: "overview", label: "Genel bakış", description: "API anahtarı ve kullanım", icon: "i-key" },
     { view: "models", label: "Modeller", description: "Kullanılabilir model bilgileri", icon: "i-code" },
+    { view: "playground", label: "Deneme alanı", description: "API bağlantısını ve model yanıtını dene", icon: "i-bolt" },
     { view: "setup", label: "Kurulum", description: "Codex yapılandırması ve API bağlantısı", icon: "i-desktop" },
     { view: "users", label: "Kullanıcılar", description: "Hesap ve kota yönetimi", icon: "i-users", admin: true },
   ];
@@ -729,6 +830,7 @@
   byId("nav-overview").addEventListener("click", () => selectView("overview"));
   byId("nav-models").addEventListener("click", () => selectView("models"));
   byId("nav-users").addEventListener("click", () => selectView("users"));
+  byId("nav-playground")?.addEventListener("click", () => selectView("playground"));
   byId("setup-model").addEventListener("change", (event) => setModel(event.target.value));
   byId("aside-model-link").addEventListener("click", () => selectView("models"));
   byId("footer-key-link").addEventListener("click", (event) => {
@@ -784,17 +886,32 @@
   byId("copy-codex-config")?.addEventListener("click", () => copy(codexConfig(), configNotice("kopyalandı")));
   byId("download-codex-config")?.addEventListener("click", downloadCodexConfig);
   document.querySelectorAll("[data-copy-target]").forEach((button) => button.addEventListener("click", () => copy(byId(button.dataset.copyTarget).value, "Kopyalandı")));
-  window.addEventListener("pagehide", () => {
+  window.addEventListener("pagehide", (event) => {
+    suspended = true;
+    lifecycleRevision++;
+    identityRevision++;
     clearTimeout(refreshTimer);
     clearInterval(countdownTimer);
+    clearTimeout(toastTimeout);
+    byId("toast").hidden = true;
+    for (const controller of requestControllers) controller.abort();
     for (const url of downloadUrls) URL.revokeObjectURL(url);
     downloadUrls.clear();
-    state.secret = null;
-    state.revealed = false;
+    clearSensitiveKey();
+    for (const input of document.querySelectorAll('input[type="password"]')) input.value = "";
     if (state.key) renderSecret();
     else updateExample();
+    if (!event.persisted) playground?.dispose?.();
   });
-  window.addEventListener("pageshow", scheduleRefresh);
+  window.addEventListener("pageshow", (event) => {
+    suspended = false;
+    if (event.persisted) {
+      document.body.classList.add("auth-pending");
+      byId("auth-cover").hidden = false;
+      byId("auth-status").textContent = "Oturum yeniden kontrol ediliyor…";
+      authenticate();
+    } else scheduleRefresh();
+  });
   setBusy(false);
   authenticate();
 })();

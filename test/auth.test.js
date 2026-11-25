@@ -97,6 +97,54 @@ test("login creates a hashed opaque secure session and returns no private fields
   assert.equal(res.headers["cache-control"], "private, no-store");
 });
 
+test("login verifies the committed throttle snapshot without a separate storage read", async () => {
+  let reads = 0;
+  let mutations = 0;
+  const auth = createAuth({
+    readState: async () => { reads++; return fixture.store.readState(); },
+    mutateState: async (callback) => { mutations++; return fixture.store.mutateState(callback); },
+  });
+  const handler = authApi.createHandler(auth);
+  const success = response();
+  await handler(request({ body: { action: "login", username: "KlyMorias", password: "valid-password" } }), success);
+  assert.equal(success.statusCode, 200);
+  assert.equal(reads, 0);
+  assert.equal(mutations, 2, "only throttle and session commits need fresh storage snapshots");
+  const rejected = response();
+  await handler(request({ body: { action: "login", username: "KlyMorias", password: "wrong-password" } }), rejected);
+  assert.equal(rejected.statusCode, 401);
+  assert.equal(reads, 0);
+  assert.equal(mutations, 3, "invalid credentials only commit their throttle reservation");
+  assert.equal(rejected.headers["set-cookie"], undefined);
+});
+
+test("login rejects credentials changed after the throttle snapshot commits", async () => {
+  for (const invalidate of [
+    (state) => { state.users.klymorias.enabled = false; },
+    (state) => { state.users.klymorias.password_hash = "replacement-password-hash"; },
+    (state) => { state.users.klymorias.session_version++; },
+    (state) => { delete state.users.klymorias; },
+    (state) => { state.users.klymorias.id = "replacement-account-id"; },
+  ]) {
+    const store = memoryStore();
+    let mutations = 0;
+    const auth = createAuth({
+      readState: store.readState,
+      mutateState: async (callback) => {
+        const result = await store.mutateState(callback);
+        if (++mutations === 1) store.edit(invalidate);
+        return result;
+      },
+    });
+    const res = response();
+    await authApi.createHandler(auth)(request({ body: { action: "login", username: "KlyMorias", password: "valid-password" } }), res);
+    assert.equal(res.statusCode, 401);
+    assert.equal(JSON.parse(res.body).error.code, "invalid_credentials");
+    assert.equal(res.headers["set-cookie"], undefined);
+    assert.deepEqual(store.snapshot().sessions, {});
+  }
+});
+
 test("authentication rejects missing, expired and version-invalidated sessions", async () => {
   await assert.rejects(fixture.auth.requireUser(request()), { status: 401 });
   const res = await login();
