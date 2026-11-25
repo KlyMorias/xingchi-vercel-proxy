@@ -116,6 +116,9 @@ test("hour, day and Monday-based week usage reset and old refunds do not touch n
   assert.deepEqual((await f.store.getAccountInfo("user-alice")).usage,
     { used_this_hour: 0, used_today: 0, used_this_week: 0,
       input_tokens_today: 0, output_tokens_today: 0, total_tokens_today: 0, reserved_tokens_today: 0, remaining_tokens_today: 1_000_000_000,
+      accounting: { source: "provider_usage", status: "complete", quota_scope: "application_daily", provider_balance: null,
+        provider_balance_status: "not_exposed", reserved_kind: "admission_estimate", unknown_requests_today: 0,
+        legacy_usage_unknown: false, last_settlement: null },
       hour_resets_at: "2026-11-24T01:00:00.000Z", day_resets_at: "2026-11-25T00:00:00.000Z",
       week_resets_at: "2026-11-30T00:00:00.000Z", server_time: "2026-11-24T00:10:00.000Z" });
 });
@@ -208,7 +211,8 @@ test("invalid usage or reservation amounts cannot remove a hold or corrupt count
   const access = await f.store.reserve(api_key, { estimatedTokens: 1000 });
   for (const usage of [undefined, {}, { input_tokens: -1, output_tokens: 10 },
     { input_tokens: 1, output_tokens: 0.5 }, { input_tokens: "10", output_tokens: 2 },
-    { input_tokens: Number.MAX_SAFE_INTEGER, output_tokens: 1 }]) {
+    { input_tokens: Number.MAX_SAFE_INTEGER, output_tokens: 1 }, { input_tokens: 10, output_tokens: 2, total_tokens: 999 },
+    { input_tokens: 10, output_tokens: 2, output_tokens_details: { reasoning_tokens: 3 } }]) {
     await assert.rejects(f.store.settle(access.reservation, usage), { code: "invalid_token_usage" });
   }
   const info = await f.store.getAccountInfo("user-alice");
@@ -227,8 +231,155 @@ test("expired holds stop restricting quota without requiring a dashboard write",
   const info = await f.store.getAccountInfo("user-alice");
   assert.equal(info.usage.remaining_tokens_today, 1_000_000_000);
   assert.equal(info.usage.reserved_tokens_today, 0);
+  assert.equal(info.usage.accounting.status, "partial");
+  assert.equal(info.usage.accounting.unknown_requests_today, 1);
   assert.deepEqual(f.state(), before);
   assert.equal((await f.store.reserve(api_key, { estimatedTokens: 1_000_000_000 })).ok, true);
+});
+
+test("late actual settlement survives hold expiry and clears an expired unknown exactly once", async (context) => {
+  const f = fixture(context);
+  const start = Math.floor(Date.parse("2026-11-25T12:00:00Z") / 1000);
+  f.setNow(start);
+  const { api_key } = await f.store.createKey("user-alice");
+  const access = await f.store.reserve(api_key, { estimatedTokens: 1000 });
+  f.setNow(start + 601);
+  const before = structuredClone(f.state());
+  assert.equal((await f.store.getAccountInfo("user-alice")).usage.accounting.unknown_requests_today, 1);
+  assert.deepEqual(f.state(), before, "unknown expiry must also be visible on a read-only dashboard");
+  await Promise.all([f.store.markUnknown(access.reservation), f.store.markUnknown(access.reservation)]);
+  assert.equal((await f.store.getAccountInfo("user-alice")).usage.accounting.unknown_requests_today, 1);
+  const actual = { input_tokens: 20, output_tokens: 10, total_tokens: 30 };
+  const details = { response_id: "resp_real", model: "provider-reported-model" };
+  await Promise.all([f.store.settle(access.reservation, actual, details), f.store.settle(access.reservation, actual, details)]);
+  await f.store.markUnknown(access.reservation);
+  await f.store.release(access.reservation);
+  const info = await f.store.getAccountInfo("user-alice");
+  assert.equal(info.usage.total_tokens_today, 30);
+  assert.equal(info.usage.reserved_tokens_today, 0);
+  assert.equal(info.usage.accounting.status, "complete");
+  assert.equal(info.usage.accounting.unknown_requests_today, 0);
+  assert.equal(info.usage.used_today, 1);
+  assert.deepEqual(info.usage.accounting.last_settlement, {
+    recorded_at: "2026-11-25T12:10:01.000Z", response_id: "resp_real", model: "provider-reported-model", ...actual });
+  await assert.rejects(f.store.settle(access.reservation, { input_tokens: 21, output_tokens: 10 }),
+    { code: "conflicting_token_usage" });
+  assert.equal((await f.store.getAccountInfo("user-alice")).usage.total_tokens_today, 30);
+});
+
+test("unknown consumption is durable across key rotation and never charges an admission estimate", async () => {
+  const f = fixture();
+  const { api_key } = await f.store.createKey("user-alice");
+  const first = await f.store.reserve(api_key, { estimatedTokens: 999999 });
+  await Promise.all([f.store.markUnknown(first.reservation), f.store.markUnknown(first.reservation)]);
+  await f.store.revokeKey("user-alice");
+  const rotated = await f.store.createKey("user-alice");
+  assert.equal(rotated.usage.total_tokens_today, 0);
+  assert.equal(rotated.usage.reserved_tokens_today, 0);
+  assert.equal(rotated.usage.remaining_tokens_today, 1_000_000_000);
+  assert.equal(rotated.usage.accounting.unknown_requests_today, 1);
+  assert.equal(rotated.usage.accounting.status, "partial");
+  assert.equal(rotated.usage.accounting.provider_balance, null);
+  assert.equal(rotated.usage.accounting.provider_balance_status, "not_exposed");
+});
+
+test("an unknown marker racing with another instance's actual settlement cannot hide or double count usage", async () => {
+  const f = fixture();
+  const { api_key } = await f.store.createKey("user-alice");
+  const access = await f.store.reserve(api_key, { estimatedTokens: 1000 });
+  await Promise.all([f.store.markUnknown(access.reservation),
+    f.anotherInstance().settle(access.reservation, { input_tokens: 20, output_tokens: 10 })]);
+  const usage = (await f.store.getAccountInfo("user-alice")).usage;
+  assert.equal(usage.total_tokens_today, 30);
+  assert.equal(usage.accounting.status, "complete");
+  assert.equal(usage.accounting.unknown_requests_today, 0);
+});
+
+test("settlement receipt retention stays bounded without turning recorded usage into an unknown", async (context) => {
+  const f = fixture(context);
+  const start = Math.floor(Date.parse("2026-11-25T12:00:00Z") / 1000);
+  f.setNow(start);
+  const { api_key } = await f.store.createKey("user-alice");
+  const access = await f.store.reserve(api_key, { estimatedTokens: 1000 });
+  await f.store.settle(access.reservation, { input_tokens: 20, output_tokens: 10 });
+  f.setNow(start + 601);
+  await f.store.reserve(api_key, { consumeDaily: false });
+  assert.equal(f.state().reservations[access.reservation.id], undefined);
+  const usage = (await f.store.getAccountInfo("user-alice")).usage;
+  assert.equal(usage.total_tokens_today, 30);
+  assert.equal(usage.accounting.unknown_requests_today, 0);
+  assert.equal(usage.accounting.status, "complete");
+  await assert.rejects(f.store.settle(access.reservation, { input_tokens: 20, output_tokens: 10 }), { code: "invalid_reservation" });
+  assert.equal((await f.store.getAccountInfo("user-alice")).usage.total_tokens_today, 30);
+});
+
+test("legacy unknown usage stays partial after current token fields are initialized by a new admission", async () => {
+  const f = fixture();
+  const { api_key } = await f.store.createKey("user-alice");
+  f.change((state) => { state.usage["user-alice"] = { day: Math.floor(Date.now() / 86400000), used_today: 2 }; });
+  await f.store.reserve(api_key, { consumeDaily: false });
+  const usage = (await f.store.getAccountInfo("user-alice")).usage;
+  assert.equal(usage.input_tokens_today, 0);
+  assert.equal(usage.output_tokens_today, 0);
+  assert.equal(usage.accounting.status, "partial");
+  assert.equal(usage.accounting.legacy_usage_unknown, true);
+});
+
+test("pruned unresolved tickets leave durable unknowns and cannot silently accept a late settlement", async (context) => {
+  const f = fixture(context);
+  const start = Math.floor(Date.parse("2026-11-25T12:00:00Z") / 1000);
+  f.setNow(start);
+  const { api_key } = await f.store.createKey("user-alice");
+  const access = await f.store.reserve(api_key, { estimatedTokens: 1000 });
+  f.setNow(start + 3601);
+  // A successful mutation persists unknown usage before pruning the old ticket.
+  await f.store.reserve(api_key, { consumeDaily: false });
+  assert.equal(f.state().reservations[access.reservation.id], undefined);
+  const usage = (await f.store.getAccountInfo("user-alice")).usage;
+  assert.equal(usage.accounting.unknown_requests_today, 1);
+  assert.equal(usage.accounting.status, "partial");
+  assert.equal(usage.total_tokens_today, 0);
+  await assert.rejects(f.store.settle(access.reservation, { input_tokens: 20, output_tokens: 10 }), { code: "invalid_reservation" });
+  assert.equal((await f.store.getAccountInfo("user-alice")).usage.accounting.unknown_requests_today, 1);
+});
+
+test("legacy token tickets retain their old hold deadline but accept late actual settlement", async (context) => {
+  const f = fixture(context);
+  const start = Math.floor(Date.parse("2026-11-25T12:00:00Z") / 1000);
+  f.setNow(start);
+  const { api_key } = await f.store.createKey("user-alice");
+  const access = await f.store.reserve(api_key, { estimatedTokens: 1000 });
+  f.change((state) => {
+    const ticket = state.reservations[access.reservation.id];
+    ticket.expires_at = ticket.hold_expires_at;
+    delete ticket.hold_expires_at;
+  });
+  f.setNow(start + 601);
+  await f.store.settle(access.reservation, { input_tokens: 20, output_tokens: 10 });
+  const usage = (await f.store.getAccountInfo("user-alice")).usage;
+  assert.equal(usage.total_tokens_today, 30);
+  assert.equal(usage.accounting.unknown_requests_today, 0);
+  assert.equal(usage.accounting.status, "complete");
+  assert.equal(usage.accounting.last_settlement.model, null);
+  assert.equal(usage.accounting.last_settlement.response_id, null);
+});
+
+test("unknown counters reset at UTC midnight without hiding known last settlement metadata", async (context) => {
+  const f = fixture(context);
+  const midnight = Math.floor(Date.parse("2026-11-26T00:00:00Z") / 1000);
+  f.setNow(midnight - 10);
+  const { api_key } = await f.store.createKey("user-alice");
+  const known = await f.store.reserve(api_key);
+  await f.store.settle(known.reservation, { input_tokens: 2, output_tokens: 3 });
+  const unknown = await f.store.reserve(api_key);
+  await f.store.markUnknown(unknown.reservation);
+  assert.equal((await f.store.getAccountInfo("user-alice")).usage.accounting.status, "partial");
+  f.setNow(midnight);
+  const usage = (await f.store.getAccountInfo("user-alice")).usage;
+  assert.equal(usage.total_tokens_today, 0);
+  assert.equal(usage.accounting.unknown_requests_today, 0);
+  assert.equal(usage.accounting.status, "complete");
+  assert.equal(usage.accounting.last_settlement.total_tokens, 5);
 });
 
 test("daily token counters reset at UTC midnight and late prior-day settlement never charges the new day", async (context) => {

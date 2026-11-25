@@ -274,18 +274,21 @@ return async function handler(req, res) {
 
   let quotaSettled = false;
   let terminalReceived = false;
+  let providerStarted = false;
   const settle = async (response) => {
     terminalReceived = true;
     if (!reservation || quotaSettled) return;
     const previousPhase = phase;
-    phase = "settlement";
+    phase = "usage";
     const usage = actualTokens(response);
+    phase = "settlement";
+    const details = { response_id: response.id, model: response.model };
     try {
-      await store.settle(reservation, usage);
+      await store.settle(reservation, usage, details);
     } catch {
       // Settlement is atomic and idempotent by reservation ID, so this retry
       // cannot double-charge even when the previous write acknowledgement was lost.
-      await store.settle(reservation, usage);
+      await store.settle(reservation, usage, details);
     }
     quotaSettled = true;
     phase = previousPhase;
@@ -294,6 +297,12 @@ return async function handler(req, res) {
     if (!reservation || quotaSettled || terminalReceived) return;
     await store.release(reservation);
     quotaSettled = true;
+  };
+  const recordUnknown = async () => {
+    if (!reservation || quotaSettled) return;
+    // No guessed final charge. A missing terminal, invalid usage, or uncertain
+    // write is visible as partial accounting until actual usage can reconcile.
+    await store.markUnknown?.(reservation);
   };
   const url = `${UPSTREAM_ORIGIN}/v1/responses`;
   const controller = new AbortController();
@@ -308,6 +317,7 @@ return async function handler(req, res) {
   let phase = "fetch";
   try {
     const upstreamStart = performance.now();
+    providerStarted = true;
     const upstream = await fetch(url, {
       method: req.method,
       headers: upstreamHeaders(req, selectedModel.apiKey, authMode),
@@ -318,26 +328,30 @@ return async function handler(req, res) {
     timing("upstream", upstreamStart);
     if (!upstream.ok) {
       diagnostics("upstream_http", { status: upstream.status });
-      try { await refund(); } catch { diagnostics("refund", { reason: "storage_unavailable" }); }
+      const upstreamError = await normalizeProviderError(upstream, { onUsage: settle });
+      // Definite admission/authentication denials can release the estimate.
+      // A server failure or timeout is not proof of zero provider consumption.
+      const definiteRejection = [400, 401, 403, 404, 413, 422, 429].includes(upstream.status);
+      try { if (definiteRejection) await refund(); else await recordUnknown(); }
+      catch { diagnostics(definiteRejection ? "refund" : "accounting_unknown", { reason: "storage_unavailable" }); }
       keepalive?.stop();
       if (!res.headersSent) {
         res.setHeader("x-klyapi-error-source", "upstream");
-        await writeUpstreamResponse(await normalizeProviderError(upstream), res);
+        await writeUpstreamResponse(upstreamError, res);
       } else {
         const failure = { error: { type: "upstream_error", code: "upstream_http_error", message: "Provider returned an error. Retry later.", upstream_status: upstream.status } };
         if (!clientStream) res.end(JSON.stringify(failure));
         else res.end(format === "messages" ? `event: error\ndata: ${JSON.stringify({ type: "error", ...failure })}\n\n` : `data: ${JSON.stringify(failure)}\n\n`);
-        await upstream.body?.cancel().catch(() => {});
+        await upstreamError.body?.cancel().catch(() => {});
       }
     } else if (clientStream) {
       phase = "stream";
       const adapter = format === "chat" ? createChatStream(selectedModel.id, { includeUsage: clientPayload.stream_options?.include_usage === true })
         : format === "messages" ? createMessagesStream(selectedModel.id) : null;
-      await streamResponse(upstream, res, format, adapter, { onComplete: settle });
+      await streamResponse(upstream, res, format, adapter, { onTerminal: settle });
     } else {
       phase = "collect";
-      const response = await collectResponse(upstream);
-      await settle(response);
+      const response = await collectResponse(upstream, { onTerminal: settle });
       keepalive?.stop();
       const result = format === "chat" ? chatCompletionFromResponse(response, selectedModel.id)
         : format === "messages" ? messageFromResponse(response, selectedModel.id) : response;
@@ -350,17 +364,20 @@ return async function handler(req, res) {
     }
   } catch (error) {
     keepalive?.stop();
-    diagnostics(phase, { reason: controller.signal.aborted ? "aborted" : ["invalid_event", "incomplete_stream", "upstream_generation_failed"].includes(error.code) ? error.code : "upstream_request_failed" });
-    try { await refund(); } catch { diagnostics("refund", { reason: "storage_unavailable" }); }
+    const invalidUsage = error.code === "invalid_token_usage" || error.code === "conflicting_token_usage";
+    diagnostics(phase, { reason: controller.signal.aborted ? "aborted" : ["invalid_event", "incomplete_stream", "upstream_generation_failed", "invalid_token_usage", "conflicting_token_usage"].includes(error.code) ? error.code : "upstream_request_failed" });
+    try { if (providerStarted) await recordUnknown(); else await refund(); }
+    catch { diagnostics("accounting_unknown", { reason: "storage_unavailable" }); }
     if (!res.destroyed && !res.headersSent) {
-      res.setHeader("x-klyapi-error-source", phase === "settlement" ? "quota_storage" : "upstream_transport");
-      sendJson(res, phase === "settlement" ? 503 : 502,
-        phase === "settlement" ? "Token accounting is temporarily unavailable" : "Upstream request failed");
+      res.setHeader("x-klyapi-error-source", invalidUsage ? "upstream_usage" : phase === "settlement" ? "quota_storage" : "upstream_transport");
+      sendJson(res, phase === "settlement" && !invalidUsage ? 503 : 502,
+        invalidUsage ? { code: "invalid_token_usage", message: "Provider did not return valid token usage" }
+          : phase === "settlement" ? "Token accounting is temporarily unavailable" : "Upstream request failed");
     }
     else if (!res.destroyed) {
       const failure = { error: { type: "api_error",
-        message: phase === "settlement" ? "Token accounting is temporarily unavailable" : "Upstream generation failed",
-        code: phase === "settlement" ? "token_accounting_unavailable" : "upstream_generation_failed" } };
+        message: invalidUsage ? "Provider did not return valid token usage" : phase === "settlement" ? "Token accounting is temporarily unavailable" : "Upstream generation failed",
+        code: invalidUsage ? "invalid_token_usage" : phase === "settlement" ? "token_accounting_unavailable" : "upstream_generation_failed" } };
       res.end(!clientStream ? JSON.stringify(failure) : format === "messages" ? `event: error\ndata: ${JSON.stringify({ type: "error", ...failure })}\n\n` : `data: ${JSON.stringify(failure)}\n\n`);
     }
   } finally {

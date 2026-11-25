@@ -810,18 +810,21 @@ test("a slow nonstream provider sends valid JSON keepalive before returning the 
   assert.equal(JSON.parse(res.body).output[0].content[0].text, "delayed OK");
 });
 
-test("refund storage failure never hides the original upstream HTTP error", async () => {
+test("accounting storage failure never hides the original upstream HTTP error", async () => {
   process.env.XINGCHI_API_KEY = "upstream-secret";
   const originalError = '{"error":{"code":"overloaded","message":"Retry later"}}';
-  global.fetch = async () => new Response(originalError, { status: 503, headers: { "content-type": "application/json" } });
+  for (const status of [403, 503]) {
+  global.fetch = async () => new Response(originalError, { status, headers: { "content-type": "application/json" } });
   const failureHandler = proxyModule.createHandler({ isConfigured: () => true,
     reserve: async () => ({ ok: true, reservation: { id: "refund-ticket" } }),
+    markUnknown: async () => { throw new Error("storage unavailable"); },
     release: async () => { throw new Error("storage unavailable"); } });
   const res = makeResponse();
   await failureHandler(makeRequest({ headers: {
     authorization: "Bearer kly_" + "k".repeat(43), "content-type": "application/json",
   } }), res);
-  assert.equal(res.statusCode, 503);
+  assert.equal(res.statusCode, status);
   assert.equal(res.headers["x-klyapi-error-source"], "upstream");
   assert.equal(res.body, originalError);
+  }
 });

@@ -122,6 +122,7 @@ async function dispatch(format, payload, responseFactory = () => successfulUpstr
   const handler = createHandler({ isConfigured: () => true,
     reserve: async (token, options) => { trace.push("reserve"); assert.equal(token, TOKEN); reservations.push(options); return { ok: true, reservation }; },
     settle: async (ticket, usage) => { trace.push("settle"); assert.equal(ticket, reservation); settlements.push(usage); },
+    markUnknown: async (ticket) => { trace.push("unknown"); assert.equal(ticket, reservation); },
     release: async (ticket) => { trace.push("release"); assert.equal(ticket, reservation); refunds.push(ticket); } });
   global.fetch = async (url, options) => {
     trace.push("fetch");
@@ -135,8 +136,8 @@ async function dispatch(format, payload, responseFactory = () => successfulUpstr
   return { res, trace, reservations, settlements, refunds, upstreamRequests };
 }
 
-function assertAccounting(observed, success) {
-  assert.deepEqual(observed.trace, success ? ["reserve", "fetch", "settle"] : ["reserve", "fetch", "release"]);
+function assertAccounting(observed, success, uncertain = false) {
+  assert.deepEqual(observed.trace, success ? ["reserve", "fetch", "settle"] : ["reserve", "fetch", uncertain ? "unknown" : "release"]);
   assert.equal(observed.upstreamRequests.length, 1, "history handling must not introduce provider retries or summary calls");
   assert.equal(observed.reservations.length, 1);
   const options = observed.reservations[0];
@@ -146,7 +147,7 @@ function assertAccounting(observed, success) {
   assert.equal(options.estimatedTokens, Buffer.byteLength(upstream.body, "utf8") + MAX_OUTPUT,
     "reserve exactly the final serialized upstream body plus the requested output ceiling");
   assert.deepEqual(observed.settlements, success ? [USAGE] : []);
-  assert.equal(observed.refunds.length, success ? 0 : 1);
+  assert.equal(observed.refunds.length, success || uncertain ? 0 : 1);
 }
 
 function assertClientSuccess(format, stream, res) {
@@ -341,7 +342,7 @@ test("turn-limit fallback only matches the exact structured code on HTTP 400; un
     const payload = payloadFor("responses", 1);
     const observed = await dispatch("responses", payload, () => new Response(scenario.body, { status: scenario.status,
       headers: { "content-type": scenario.contentType || "application/json", "retry-after": "7", "x-request-id": "req_unrelated" } }));
-    assertAccounting(observed, false);
+    assertAccounting(observed, false, scenario.status >= 500);
     assert.equal(observed.res.statusCode, scenario.status);
     assert.equal(observed.res.body, scenario.body);
     assert.equal(observed.res.headers["retry-after"], "7");

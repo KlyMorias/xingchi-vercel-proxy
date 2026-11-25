@@ -48,6 +48,9 @@ test("account bootstrap authenticates and returns usage from exactly one storage
   assert.equal(body.usage.remaining_tokens_today, 1_000_000_000);
   assert.equal(body.usage.used_today, 7);
   assert.equal(body.usage.used_this_week, 24);
+  assert.deepEqual(body.usage.accounting, { source: "provider_usage", status: "partial", quota_scope: "application_daily",
+    provider_balance: null, provider_balance_status: "not_exposed", reserved_kind: "admission_estimate",
+    unknown_requests_today: 0, legacy_usage_unknown: true, last_settlement: null });
   assert.equal(body.service.model, "gpt-6.1-sol");
   for (const secret of [token, digest, "private-user-id", "private-password-hash", "private-api-key-hash", "session_version"]) {
     assert.equal(res.body.includes(secret), false, `response must exclude ${secret}`);
@@ -57,6 +60,26 @@ test("account bootstrap authenticates and returns usage from exactly one storage
   assert.equal(res.headers["x-content-type-options"], "nosniff");
   assert.equal(res.headers["set-cookie"], undefined);
   assert.equal(res.headers["access-control-allow-origin"], undefined);
+});
+
+test("accounting identifies legacy unknowns without inventing usage or rewriting the snapshot", () => {
+  const f = fixture();
+  const before = structuredClone(f.state);
+  const legacy = accountInfoFromState(f.state, "private-user-id", now).usage;
+  assert.equal(legacy.total_tokens_today, 0);
+  assert.equal(legacy.accounting.status, "partial");
+  assert.equal(legacy.accounting.legacy_usage_unknown, true);
+  assert.equal(legacy.accounting.source, "provider_usage");
+  assert.equal(legacy.accounting.provider_balance, null);
+  assert.deepEqual(f.state, before);
+  Object.assign(f.state.usage["private-user-id"], { input_tokens_today: 0, output_tokens_today: 0 });
+  assert.equal(accountInfoFromState(f.state, "private-user-id", now).usage.accounting.status, "complete");
+  f.state.usage["private-user-id"].last_settlement = { recorded_at: new Date(now * 1000).toISOString(),
+    response_id: "<private response data>", model: "private prompt text", input_tokens: 3, output_tokens: 2, total_tokens: 5 };
+  const last = accountInfoFromState(f.state, "private-user-id", now).usage.accounting.last_settlement;
+  assert.equal(last.response_id, null);
+  assert.equal(last.model, null);
+  assert.equal(last.total_tokens, 5);
 });
 
 test("account bootstrap fails closed for missing, expired, disabled, deleted and invalidated sessions", async () => {

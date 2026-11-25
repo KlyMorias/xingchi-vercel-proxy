@@ -67,6 +67,13 @@ test("rejects upstream failures and invalid tool JSON as 502", () => {
   }
 });
 
+test("final Messages usage rejects missing or inconsistent provider counts instead of inventing zero", () => {
+  for (const usage of [undefined, { input_tokens: 17, output_tokens: 5, total_tokens: 99 },
+    { input_tokens: 17, output_tokens: 5, output_tokens_details: { reasoning_tokens: 6 } }]) {
+    assert.throws(() => messageFromResponse({ ...finalResponse, usage }, model), { code: "invalid_token_usage" });
+  }
+});
+
 test("streams text once despite repeated Responses done/completed snapshots", () => {
   const mapper = createMessagesStream(model);
   const frames = [

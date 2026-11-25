@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { EventEmitter } = require("node:events");
 const { createHandler } = require("../api/proxy");
 const { estimatedTokens, actualTokens } = require("../lib/token-usage");
 
@@ -23,9 +24,10 @@ function request(path, stream = false) {
   async *[Symbol.asyncIterator]() { yield Buffer.from(JSON.stringify({ ...payload, model: "gpt-6.1-sol", stream })); } };
 }
 function sink(onWrite = () => {}) {
+  const text = (chunk) => ArrayBuffer.isView(chunk) ? Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength).toString("utf8") : String(chunk);
   return { headers: {}, chunks: [], setHeader(k, v) { this.headers[k] = v; },
-    write(chunk) { onWrite(String(chunk)); this.headersSent = true; this.chunks.push(String(chunk)); return true; },
-    end(chunk) { if (chunk) this.chunks.push(String(chunk)); this.body = this.chunks.join(""); this.writableEnded = true; } };
+    write(chunk) { onWrite(text(chunk)); this.headersSent = true; this.chunks.push(text(chunk)); return true; },
+    end(chunk) { if (chunk) this.chunks.push(text(chunk)); this.body = this.chunks.join(""); this.writableEnded = true; } };
 }
 
 test("admission budget includes UTF8 input and the full requested output ceiling", () => {
@@ -36,8 +38,127 @@ test("admission budget includes UTF8 input and the full requested output ceiling
     assert.throws(() => estimatedTokens(body, ceiling), /token budget is invalid/);
   }
   assert.deepEqual(actualTokens(terminal()), { input_tokens: 17, output_tokens: 11, total_tokens: 28 });
-  for (const usage of [null, {}, { input_tokens: -1, output_tokens: 1 }, { input_tokens: 1, output_tokens: 0.5 }]) {
+  for (const usage of [null, {}, { input_tokens: -1, output_tokens: 1 }, { input_tokens: 1, output_tokens: 0.5 },
+    { input_tokens: 1, output_tokens: 2, total_tokens: 99 }, { input_tokens: 1, output_tokens: 2, total_tokens: -3 },
+    { input_tokens: 1, output_tokens: 2, total_tokens: "3" }, { input_tokens: 1, output_tokens: 2, total_tokens: null },
+    { input_tokens: 1, output_tokens: 2, input_tokens_details: { cached_tokens: 2 } },
+    { input_tokens: 1, output_tokens: 2, output_tokens_details: { reasoning_tokens: 3 } },
+    { input_tokens: 1, output_tokens: 2, input_tokens_details: { cached_tokens: -1 } },
+    { input_tokens: 1, output_tokens: 2, output_tokens_details: { reasoning_tokens: 0.5 } },
+    { input_tokens: 1, output_tokens: 2, input_tokens_details: [] }]) {
     assert.throws(() => actualTokens({ usage }), /valid token usage/);
+  }
+});
+
+test("missing and inconsistent terminal usage never becomes success or a quota-storage error across APIs", async () => {
+  for (const path of ["v1/responses", "v1/chat/completions", "v1/messages"]) {
+    for (const stream of [false, true]) {
+      for (const sse of [false, true]) {
+        for (const usage of [undefined, { input_tokens: 17, output_tokens: 11, total_tokens: 999 },
+          { input_tokens: 17, output_tokens: 11, input_tokens_details: { cached_tokens: 18 } }]) {
+          let unknown = 0;
+          const dispatch = createHandler({ isConfigured: () => true,
+            reserve: async () => ({ ok: true, reservation: { id: "test" } }),
+            settle: async () => assert.fail("Invalid provider usage cannot be charged"),
+            release: async () => assert.fail("Unreported usage cannot be described as confirmed zero consumption"),
+            markUnknown: async () => { unknown++; } });
+          const response = terminal({ usage });
+          global.fetch = async () => new Response(sse ? `data: ${JSON.stringify({ type: "response.completed", response })}\n\n`
+            : JSON.stringify(response), { headers: { "content-type": sse ? "text/event-stream" : "application/json" } });
+          const res = sink();
+          await dispatch(request(path, stream), res);
+          assert.equal(res.statusCode, 502);
+          assert.equal(res.headers["x-klyapi-error-source"], "upstream_usage");
+          assert.match(res.body, /invalid_token_usage/);
+          assert.doesNotMatch(res.body, /quota_storage|response.completed|message_stop|finish_reason/);
+          assert.equal(unknown, 1);
+        }
+      }
+    }
+  }
+});
+
+test("valid provider usage on failed and cancelled terminals is recorded while generation still fails", async () => {
+  for (const status of ["failed", "cancelled"]) {
+    for (const sse of [false, true]) {
+      for (const stream of [false, true]) {
+        const calls = [];
+        const dispatch = createHandler({ isConfigured: () => true,
+          reserve: async () => ({ ok: true, reservation: { id: "test" } }),
+          settle: async (_ticket, usage, details) => {
+            assert.deepEqual(usage, { input_tokens: 17, output_tokens: 11, total_tokens: 28 });
+            assert.deepEqual(details, { response_id: "resp_token_test", model: "gpt-6.1-sol" });
+            calls.push("settle");
+          },
+          release: async () => assert.fail("Known generated usage must not be refunded"),
+          markUnknown: async () => assert.fail("Valid recorded usage is known even when generation failed") });
+        const response = terminal({ status, error: { message: "private provider diagnostic" } });
+        global.fetch = async () => new Response(sse ? `data: ${JSON.stringify({ type: `response.${status}`, response })}\n\n`
+          : JSON.stringify(response), { headers: { "content-type": sse ? "text/event-stream" : "application/json" } });
+        const res = sink();
+        await dispatch(request("v1/responses", stream), res);
+        assert.equal(res.statusCode, 502);
+        assert.deepEqual(calls, ["settle"]);
+        assert.doesNotMatch(res.body, /private provider diagnostic|response.completed/);
+      }
+    }
+  }
+});
+
+test("uncertain client disconnect after partial output records unknown consumption without guessing", async () => {
+  let unknown = 0;
+  const dispatch = createHandler({ isConfigured: () => true,
+    reserve: async () => ({ ok: true, reservation: { id: "test" } }),
+    settle: async () => assert.fail("No actual terminal usage is available"),
+    release: async () => assert.fail("An aborted provider request is not proof of zero usage"),
+    markUnknown: async () => { unknown++; } });
+  global.fetch = async (_url, { signal }) => new Response(new ReadableStream({
+    start(controller) {
+      signal.addEventListener("abort", () => controller.error(Object.assign(new Error("Aborted"), { name: "AbortError" })));
+      controller.enqueue(Buffer.from('data: {"type":"response.output_text.delta","delta":"partial"}\n\n'));
+    },
+  }), { headers: { "content-type": "text/event-stream" } });
+  let res;
+  res = Object.assign(new EventEmitter(), sink(() => { res.destroyed = true; res.emit("close"); }));
+  await dispatch(Object.assign(new EventEmitter(), request("v1/responses", true)), res);
+  assert.equal(unknown, 1);
+});
+
+test("a non-2xx provider error can report real usage without turning the generation into success", async () => {
+  for (const nested of [false, true]) {
+    let settled = 0;
+    const dispatch = createHandler({ isConfigured: () => true,
+      reserve: async () => ({ ok: true, reservation: { id: "test" } }),
+      settle: async (_ticket, usage) => { settled++; assert.equal(usage.total_tokens, 28); },
+      release: async () => assert.fail("A provider HTTP error does not erase reported token usage"),
+      markUnknown: async () => assert.fail("This usage is known") });
+    const response = terminal({ status: "failed", error: { code: "server_error", message: "Provider failed" } });
+    global.fetch = async () => new Response(JSON.stringify(nested ? { error: { code: "server_error" }, response } : response),
+      { status: 503, headers: { "content-type": "application/json", "retry-after": "10" } });
+    const res = sink();
+    await dispatch(request("v1/responses"), res);
+    assert.equal(settled, 1);
+    assert.equal(res.statusCode, 503);
+    assert.equal(res.headers["x-klyapi-error-source"], "upstream");
+    assert.equal(res.headers["retry-after"], "10");
+    assert.match(res.body, /server_error/);
+  }
+});
+
+test("known terminal usage survives presentation failures without reporting a successful generation", async () => {
+  for (const extra of [{ output: {} }, { error: { message: "private upstream diagnostic" } }]) {
+    let settled = 0;
+    const dispatch = createHandler({ isConfigured: () => true,
+      reserve: async () => ({ ok: true, reservation: { id: "test" } }),
+      settle: async (_ticket, usage) => { settled++; assert.equal(usage.total_tokens, 28); },
+      release: async () => assert.fail("Presentation failure cannot erase known actual usage"),
+      markUnknown: async () => assert.fail("Actual usage has already been recorded") });
+    global.fetch = async () => new Response(JSON.stringify(terminal(extra)), { headers: { "content-type": "application/json" } });
+    const res = sink();
+    await dispatch(request("v1/responses"), res);
+    assert.equal(settled, 1);
+    assert.equal(res.statusCode, 502);
+    assert.doesNotMatch(res.body, /private upstream diagnostic|response.completed/);
   }
 });
 
@@ -115,16 +236,39 @@ test("accounting failure cannot emit successful completion or refund generated t
   assert.doesNotMatch(res.body, /response.completed/);
 });
 
-test("upstream failure releases the token hold and never settles usage", async () => {
+test("a definite provider denial releases the token hold and never settles usage", async () => {
   const calls = [];
   const dispatch = createHandler({ isConfigured: () => true,
     reserve: async () => ({ ok: true, reservation: { id: "test" } }),
     settle: async () => assert.fail(), release: async () => { calls.push("release"); } });
-  global.fetch = async () => new Response('{"error":"provider down"}', { status: 503 });
+  global.fetch = async () => new Response('{"error":"forbidden"}', { status: 403 });
   const res = sink();
   await dispatch(request("v1/responses"), res);
   assert.deepEqual(calls, ["release"]);
-  assert.equal(res.statusCode, 503);
+  assert.equal(res.statusCode, 403);
+});
+
+test("uncertain HTTP failures retain unknown accounting and preserve the original error response", async () => {
+  for (const [status, contentType, body] of [
+    [503, "application/json", '{"error":{"code":"overloaded"}}'],
+    [502, "text/html", "<html>Bad gateway</html>"],
+    [408, "application/json", '{"error":"timeout"}'],
+    [499, "text/plain", "Cancelled"],
+  ]) {
+    let unknown = 0;
+    const dispatch = createHandler({ isConfigured: () => true,
+      reserve: async () => ({ ok: true, reservation: { id: "test" } }),
+      settle: async () => assert.fail("No actual usage was reported"),
+      release: async () => assert.fail("An uncertain failure does not prove zero consumption"),
+      markUnknown: async () => { unknown++; } });
+    global.fetch = async () => new Response(body, { status, headers: { "content-type": contentType } });
+    const res = sink();
+    await dispatch(request("v1/responses"), res);
+    assert.equal(unknown, 1);
+    assert.equal(res.statusCode, status);
+    assert.equal(res.body, body);
+    assert.equal(res.headers["x-klyapi-error-source"], "upstream");
+  }
 });
 
 test("known complete JSON usage is settled even when an SSE client disconnects on the first frame", async () => {

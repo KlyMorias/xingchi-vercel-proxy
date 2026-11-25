@@ -27,7 +27,7 @@ function terminal() {
 function store(overrides = {}) {
   return { isConfigured: () => true, authenticate: async () => ({ ok: true }),
     reserve: async () => ({ ok: true, reservation: { id: "gateway-test" } }),
-    settle: async () => {}, release: async () => {}, ...overrides };
+    settle: async () => {}, markUnknown: async () => {}, release: async () => {}, ...overrides };
 }
 
 async function listen(t, options = {}) {
@@ -384,12 +384,16 @@ test("streamed events reach the real HTTP client before completion and settle be
   assert.match(response.body, /response.completed/);
 });
 
-test("a disconnected HTTP stream aborts provider work and releases its token reservation", async (t) => {
+test("a disconnected HTTP stream aborts provider work and records unknown consumption", async (t) => {
   let aborted;
-  let refunded;
+  let unknown;
   const sawAbort = new Promise((resolve) => { aborted = resolve; });
-  const sawRefund = new Promise((resolve) => { refunded = resolve; });
-  const { port } = await listen(t, { keepaliveIntervalMs: 10, store: store({ release: async () => refunded() }) });
+  const sawUnknown = new Promise((resolve) => { unknown = resolve; });
+  const { port } = await listen(t, { keepaliveIntervalMs: 10, store: store({
+    markUnknown: async () => unknown(),
+    release: async () => assert.fail("Cancellation cannot confirm that the provider consumed zero tokens"),
+    settle: async () => assert.fail("No real usage was returned before cancellation"),
+  }) });
   global.fetch = async (_url, options) => new Promise((_resolve, reject) => {
     options.signal.addEventListener("abort", () => { aborted(); reject(new DOMException("Canceled", "AbortError")); }, { once: true });
   });
@@ -401,7 +405,7 @@ test("a disconnected HTTP stream aborts provider work and releases its token res
     req.on("error", reject);
     req.end('{"input":"hello","stream":true}');
   });
-  await Promise.race([Promise.all([sawAbort, sawRefund]), new Promise((_resolve, reject) => {
+  await Promise.race([Promise.all([sawAbort, sawUnknown]), new Promise((_resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("provider cancellation timed out")), 2000); timer.unref();
   })]);
 });
