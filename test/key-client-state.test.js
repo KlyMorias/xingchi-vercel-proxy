@@ -8,9 +8,15 @@ const source = fs.readFileSync(path.join(__dirname, '../assets/key.js'), 'utf8')
 
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
 const token = suffix => `kly_${suffix.repeat(43)}`;
+function accounting(overrides = {}) {
+  return { source: 'provider_usage', status: 'complete', quota_scope: 'application_daily', provider_balance: null,
+    provider_balance_status: 'not_exposed', reserved_kind: 'admission_estimate', unknown_requests_today: 0,
+    legacy_usage_unknown: false, last_settlement: null, ...overrides };
+}
 function account({ username = 'Owner', role = 'admin', key = null, usage = {} } = {}) {
   return { user: { username, role, enabled: true, daily_tokens: 1000000000, requests_per_minute: 5 }, key, limits: { daily_tokens: 1000000000, requests_per_minute: 5 },
-    usage: { input_tokens_today: 0, output_tokens_today: 0, total_tokens_today: 0, reserved_tokens_today: 0, remaining_tokens_today: 1000000000, ...usage },
+    usage: { input_tokens_today: 0, output_tokens_today: 0, total_tokens_today: 0, reserved_tokens_today: 0, remaining_tokens_today: 1000000000,
+      used_this_hour: 0, used_today: 0, used_this_week: 0, accounting: accounting(), ...usage },
     service: { model: 'gpt-6.1-sol', models: [{ id: 'gpt-6.1-sol' }], generation_available: true } };
 }
 function metadata(secret, created = '2026-11-21T00:00:00Z') {
@@ -29,6 +35,7 @@ function fixture(initial = account(), { lazyModule = false } = {}) {
     constructor(tag = 'div') {
       this.tagName = tag.toUpperCase(); this.children = []; this.events = new Map(); this.attributes = new Map(); this.dataset = {};
       this.value = ''; this.textContent = ''; this.hidden = false; this.disabled = false; this.open = false; this._classes = new Set();
+      this.style = {};
       this.classList = { add: (...names) => names.forEach(n => this._classes.add(n)), remove: (...names) => names.forEach(n => this._classes.delete(n)),
         contains: name => this._classes.has(name), toggle: (name, force) => { const add = force === undefined ? !this._classes.has(name) : force; if (add) this._classes.add(name); else this._classes.delete(name); return add; } };
     }
@@ -66,16 +73,20 @@ function fixture(initial = account(), { lazyModule = false } = {}) {
     if (!nodes.has(id)) { const node = new Element(id.endsWith('dialog') ? 'dialog' : id.endsWith('form') ? 'form' : 'div'); node.id = id; nodes.set(id, node); }
     return nodes.get(id);
   };
+  const languages = Object.fromEntries(['curl', 'javascript', 'python'].map(language => {
+    const button = new Element('button'); button.dataset.exampleLanguage = language; return [language, button];
+  }));
   document = { hidden: false, activeElement: null, body: new Element('body'), head: new Element('head'), getElementById: byId, createElement: tag => new Element(tag),
     createDocumentFragment: () => Object.assign(new Element(), { fragment: true }), createTextNode: text => ({ textContent: text }),
     addEventListener(name, callback) { if (!documentEvents.has(name)) documentEvents.set(name, []); documentEvents.get(name).push(callback); },
     querySelector(selector) { return selector === 'dialog[open]' ? [...nodes.values()].find(node => node.open) || null : null; },
-    querySelectorAll(selector) { return selector === 'input[type="password"]' ? [...nodes.values()].filter(node => node.type === 'password') : []; } };
+    querySelectorAll(selector) { return selector === 'input[type="password"]' ? [...nodes.values()].filter(node => node.type === 'password')
+      : selector === '[data-example-language]' ? Object.values(languages) : []; } };
   document.body.classList.add('auth-pending');
   for (const id of ['current-password', 'new-password', 'confirm-password', 'user-password']) byId(id).type = 'password';
   byId('user-filter').value = 'all';
   const location = { hash: '', replace: target => redirects.push(target) };
-  const window = { location, KlyCodexConfig: config, KlyPlayground: { init(options) { playground.options = options; return { setModels(models) { playground.models = models; }, clearKey() { playground.clears++; }, dispose() { playground.disposed++; } }; } },
+  const window = { location, KlyCodexConfig: config, KlyPlayground: { init(options) { playground.options = options; return { setModels(models) { playground.models = models; }, setSelectedModel(model) { playground.selectedModel = model; }, clearKey() { playground.clears++; }, dispose() { playground.disposed++; } }; } },
     history: { pushState(_a, _b, hash) { location.hash = hash; }, replaceState(_a, _b, hash) { location.hash = hash; } },
     addEventListener(name, callback) { if (!windowEvents.has(name)) windowEvents.set(name, []); windowEvents.get(name).push(callback); }, scrollTo() {}, confirm: () => true };
   const playgroundModule = window.KlyPlayground;
@@ -98,7 +109,7 @@ function fixture(initial = account(), { lazyModule = false } = {}) {
     requestAnimationFrame: cb => cb(), console }, { filename: 'assets/key.js' });
   const flush = async () => { for (let i = 0; i < 4; i++) await new Promise(resolve => setImmediate(resolve)); };
   const event = async (events, name, detail) => { await Promise.all((events.get(name) || []).map(cb => cb({ preventDefault() {}, ...detail }))); await flush(); };
-  return { byId, calls, copied, redirects, playground, response, flush, document, window,
+  return { byId, calls, copied, redirects, playground, response, flush, document, window, languages,
     async loadModule() { window.KlyPlayground = playgroundModule; document.head.children.at(-1).onload(); await flush(); },
     setSnapshot(value) { snapshot = value; }, setPostKey(value) { postKey = value; }, setHandler(value) { handler = value; },
     click: async id => { await byId(id).emit('click'); await flush(); },
@@ -186,13 +197,153 @@ test('dashboard renders actual token usage and reservations without interpreting
   assert.equal(f.byId('output-token-count').textContent, '750');
   assert.equal(f.byId('usage-progress').max, 1000000000);
   assert.equal(f.byId('usage-progress').value, 2000);
-  assert.match(f.byId('remaining-label').textContent, /^999\.995\.000 token kaldı · 12 sa sonra yenilenir$/);
+  assert.match(f.byId('remaining-label').textContent, /^999\.995\.000 token uygulama kotası kaldı · 12 sa sonra yenilenir$/);
   assert.equal(f.byId('reserved-token-note').hidden, false);
   assert.match(f.byId('reserved-token-note').textContent, /^3\.000 token/);
   f.setSnapshot(account()); await f.click('refresh-usage');
   assert.equal(f.byId('reserved-token-note').hidden, true);
   assert.equal(f.byId('usage-count').textContent, '0');
-  assert.match(f.byId('remaining-label').textContent, /^1\.000\.000\.000 token kaldı/);
+  assert.match(f.byId('remaining-label').textContent, /^1\.000\.000\.000 token uygulama kotası kaldı/);
+});
+
+test('dashboard requires explicit valid accounting and never turns missing or invalid token usage into zero', async () => {
+  const f = fixture(); await f.flush();
+  const unavailable = () => {
+    for (const id of ['usage-count', 'input-token-count', 'output-token-count', 'remaining-token-count']) assert.equal(f.byId(id).textContent, '—', id);
+    assert.equal(f.byId('usage-status').dataset.state, 'unavailable');
+    assert.equal(f.byId('usage-progress').hidden, true);
+    assert.equal(f.byId('usage-composition').hidden, true);
+    assert.equal(f.byId('usage-receipt').hidden, true);
+    assert.match(f.byId('usage-coverage').textContent, /sıfır kabul edilmedi/);
+  };
+  f.setSnapshot({ ...account(), usage: undefined }); await f.click('refresh-usage'); unavailable();
+  for (const value of [undefined, null, {}, accounting({ source: 'estimated' }), accounting({ status: 'complete', unknown_requests_today: 1 }),
+    accounting({ unknown_requests_today: '0' }), accounting({ provider_balance: 1000000000 }), accounting({ last_settlement: {} })]) {
+    f.setSnapshot(account({ usage: { accounting: value } })); await f.click('refresh-usage'); unavailable();
+  }
+  for (const field of ['input_tokens_today', 'output_tokens_today', 'total_tokens_today', 'reserved_tokens_today']) {
+    for (const value of [undefined, null, '', false, true, '0', -1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, [], {}]) {
+      f.setSnapshot(account({ usage: { [field]: value } })); await f.click('refresh-usage'); unavailable();
+    }
+  }
+  f.setSnapshot(account({ usage: { input_tokens_today: 4, output_tokens_today: 3, total_tokens_today: 8 } }));
+  await f.click('refresh-usage'); unavailable();
+  f.setSnapshot(account()); await f.click('refresh-usage');
+  assert.equal(f.byId('usage-count').textContent, '0');
+  assert.equal(f.byId('usage-status').dataset.state, 'complete');
+  assert.equal(f.byId('remaining-token-count').textContent, '1.000.000.000');
+  assert.equal(f.byId('usage-composition').hidden, true);
+});
+
+test('daily application quota is never fabricated from missing limits or remaining fields', async () => {
+  const f = fixture(); await f.flush();
+  for (const value of [undefined, null, '', false, '1000000000', -1, 0.5, Number.MAX_SAFE_INTEGER + 1]) {
+    f.setSnapshot(account({ usage: { remaining_tokens_today: value } })); await f.click('refresh-usage');
+    assert.equal(f.byId('usage-count').textContent, '0', 'known recorded usage remains visible');
+    assert.equal(f.byId('remaining-token-count').textContent, '—');
+    assert.equal(f.byId('usage-progress').hidden, true);
+  }
+  f.setSnapshot(account({ usage: { remaining_tokens_today: 999 } })); await f.click('refresh-usage');
+  assert.equal(f.byId('remaining-token-count').textContent, '—', 'inconsistent server remaining is not displayed');
+  const snapshot = account(); delete snapshot.limits; f.setSnapshot(snapshot); await f.click('refresh-usage');
+  assert.equal(f.byId('daily-limit').textContent, '—');
+  assert.equal(f.byId('daily-token-credit').textContent, '—');
+  assert.equal(f.byId('minute-limit').textContent, '—');
+  assert.equal(f.byId('remaining-token-count').textContent, '—');
+  assert.match(f.byId('usage-coverage').textContent, /Günlük sınır uygulama kotasıdır/);
+  assert.match(f.byId('usage-coverage').textContent, /satın alınmış bakiyesi bildirilmez/);
+});
+
+test('partial accounting shows recorded lower bounds, estimated holds and no available balance', async () => {
+  const f = fixture(account({ usage: { input_tokens_today: 1250, output_tokens_today: 750, total_tokens_today: 2000,
+    reserved_tokens_today: 100, remaining_tokens_today: 999997900,
+    accounting: accounting({ status: 'partial', unknown_requests_today: 2, legacy_usage_unknown: true }) } }));
+  await f.flush();
+  assert.equal(f.byId('usage-count').textContent, 'En az 2.000');
+  assert.equal(f.byId('input-token-count').textContent, 'En az 1.250');
+  assert.equal(f.byId('output-token-count').textContent, 'En az 750');
+  assert.equal(f.byId('usage-status').dataset.state, 'partial');
+  assert.equal(f.byId('remaining-token-count').textContent, '—');
+  assert.equal(f.byId('usage-progress').hidden, true);
+  assert.match(f.byId('usage-coverage').textContent, /2 isteğin token kullanımı doğrulanamadı/);
+  assert.match(f.byId('usage-coverage').textContent, /Önceki isteklerin token ayrıntıları bilinmiyor/);
+  assert.match(f.byId('reserved-token-note').textContent, /100 token tahmini geçici rezervasyon/);
+  assert.match(f.byId('reserved-token-note').textContent, /Gerçek kullanım değildir/);
+  assert.equal(f.byId('usage-input-share').style.width, '62.5%');
+  assert.equal(f.byId('usage-output-share').style.width, '37.5%');
+  assert.match(f.byId('usage-composition').getAttribute('aria-label'), /1\.250 giriş \+ 750 çıkış = 2\.000 token/);
+});
+
+test('dashboard receipts and request counts show server records and clear invalid prior receipts', async () => {
+  const receipt = { recorded_at: '2026-11-21T11:59:45.000Z', response_id: 'resp_measured', model: 'gpt-6.1-sol',
+    input_tokens: 100, output_tokens: 20, total_tokens: 120 };
+  const f = fixture(account({ usage: { input_tokens_today: 100, output_tokens_today: 20, total_tokens_today: 120,
+    remaining_tokens_today: 999999880, used_this_hour: 2, used_today: 7, used_this_week: 19,
+    accounting: accounting({ last_settlement: receipt }) } })); await f.flush();
+  assert.equal(f.byId('usage-receipt').hidden, false);
+  assert.equal(f.byId('receipt-time').getAttribute('datetime'), receipt.recorded_at);
+  assert.match(f.byId('receipt-time').textContent, /UTC$/);
+  assert.equal(f.byId('receipt-response').textContent, 'resp_measured');
+  assert.equal(f.byId('receipt-model').textContent, 'gpt-6.1-sol');
+  for (const [id, value] of [['receipt-input', '100'], ['receipt-output', '20'], ['receipt-total', '120'],
+    ['usage-requests-hour', '2'], ['usage-requests-day', '7'], ['usage-requests-week', '19']]) assert.equal(f.byId(id).textContent, value);
+  f.setSnapshot(account({ usage: { used_this_hour: null, used_today: '7', used_this_week: false,
+    accounting: accounting({ last_settlement: { ...receipt, total_tokens: 999 } }) } })); await f.click('refresh-usage');
+  assert.equal(f.byId('usage-receipt').hidden, true);
+  assert.equal(f.byId('receipt-response').textContent, '—');
+  assert.equal(f.byId('receipt-time').getAttribute('datetime'), null);
+  for (const id of ['usage-requests-hour', 'usage-requests-day', 'usage-requests-week']) assert.equal(f.byId(id).textContent, '—');
+});
+
+test('failed refresh retains a visibly stale measured snapshot without changing counters', async () => {
+  const f = fixture(account({ usage: { input_tokens_today: 8, output_tokens_today: 5, total_tokens_today: 13,
+    remaining_tokens_today: 999999987 } })); await f.flush();
+  f.setHandler(url => url === '/api/account' ? f.response({ error: { code: 'storage_unavailable' } }, 503) : undefined);
+  await f.click('refresh-usage');
+  assert.equal(f.byId('usage-count').textContent, '13');
+  assert.equal(f.byId('remaining-token-count').textContent, '999.999.987');
+  assert.equal(f.byId('usage-updated').classList.contains('stale'), true);
+  assert.match(f.byId('usage-updated').textContent, /Son alınan veriler gösteriliyor/);
+});
+
+test('request example tabs generate real snippets and copy only the displayed key visibility', async () => {
+  const f = fixture(); await f.flush(); await f.click('create-key');
+  assert.equal(f.byId('overview-code').textContent.includes(token('A')), false);
+  await f.languages.javascript.emit('click');
+  assert.match(f.byId('overview-code').textContent, /await fetch\("https:\/\/klyapi\.vercel\.app\/api\/v1\/responses"/);
+  assert.doesNotThrow(() => new vm.Script(`(async () => { ${f.byId('overview-code').textContent} })`), 'the displayed JavaScript parses without executing a request');
+  assert.equal(f.byId('example-language-tag').textContent, 'JavaScript');
+  assert.equal(f.languages.javascript.getAttribute('aria-pressed'), 'true');
+  assert.equal(f.languages.curl.getAttribute('aria-pressed'), 'false');
+  await f.click('copy-overview-code');
+  assert.equal(f.copied.at(-1), f.byId('overview-code').textContent);
+  assert.match(f.copied.at(-1), /Bearer YOUR_KEY/);
+  assert.equal(f.copied.at(-1).includes(token('A')), false);
+  await f.click('reveal-key'); await f.click('copy-overview-code');
+  assert.ok(f.copied.at(-1).includes(token('A')));
+  await f.languages.python.emit('click');
+  assert.match(f.byId('overview-code').textContent, /import urllib\.request/);
+  assert.equal(f.byId('example-language-tag').textContent, 'Python');
+  assert.ok(f.byId('overview-code').textContent.includes(token('A')));
+  await f.click('reveal-key'); await f.click('copy-overview-code');
+  assert.equal(f.copied.at(-1).includes(token('A')), false);
+  await f.click('copy-example');
+  assert.match(f.copied.at(-1), /^curl /);
+  assert.match(f.copied.at(-1), /Bearer YOUR_KEY/);
+  assert.equal(f.calls.some(call => call.url === '/api/v1/responses'), false, 'changing language never sends a generation');
+});
+
+test('catalog try action opens the selected model in the playground without generating', async () => {
+  const snapshot = account(); snapshot.service.models.push({ id: 'gpt-6-astra' });
+  const f = fixture(snapshot); await f.flush(); await f.click('nav-models');
+  const astraCard = f.byId('model-catalog').children[1];
+  const tryModel = astraCard.children.at(-1).children.find(node => node.textContent === 'Modeli dene');
+  assert.ok(tryModel);
+  await tryModel.click(); await f.flush();
+  assert.equal(f.byId('playground-view').hidden, false);
+  assert.equal(f.byId('setup-model').value, 'gpt-6-astra');
+  assert.equal(f.playground.selectedModel, 'gpt-6-astra');
+  assert.equal(f.calls.some(call => call.url === '/api/v1/responses'), false);
 });
 
 test('admin creates an account with a rate limit and the common daily token allowance', async () => {

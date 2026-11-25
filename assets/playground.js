@@ -136,11 +136,31 @@
       .filter(Boolean).join("\n\n");
   }
 
+  function providerUsage(value) {
+    const count = (number) => Number.isSafeInteger(number) && number >= 0;
+    if (!value || typeof value !== "object" || Array.isArray(value)
+      || ![value.input_tokens, value.output_tokens, value.total_tokens].every(count)
+      || !Number.isSafeInteger(value.input_tokens + value.output_tokens)
+      || value.total_tokens !== value.input_tokens + value.output_tokens) return null;
+    // Detail counters are subsets, not additional token charges. Validate all
+    // supplied details before displaying any number from this usage object.
+    for (const [name, ceiling] of [["input_tokens_details", value.input_tokens], ["output_tokens_details", value.output_tokens]]) {
+      if (value[name] === undefined) continue;
+      const details = value[name];
+      if (!details || typeof details !== "object" || Array.isArray(details)
+        || !Object.values(details).every((number) => count(number) && number <= ceiling)) return null;
+    }
+    return { inputTokens: value.input_tokens, outputTokens: value.output_tokens, totalTokens: value.total_tokens };
+  }
+
   function createResponseAccumulator() {
     const parts = new Map();
     let text = "";
     let status = "in_progress";
     let outputTokens = null;
+    let inputTokens = null;
+    let totalTokens = null;
+    let usageStatus = "pending";
     let incompleteReason = "";
     let terminal = false;
     function partKey(event) {
@@ -155,7 +175,7 @@
       }).map(([, value]) => value).join("");
       if (text.length > MAX_RESPONSE_LENGTH) throw fail("Yanıt görüntülenemeyecek kadar büyük.", "response_too_large");
     }
-    function snapshot() { return { text, status, outputTokens, incompleteReason, terminal }; }
+    function snapshot() { return { text, status, inputTokens, outputTokens, totalTokens, usageStatus, incompleteReason, terminal }; }
     function accept(event) {
       if (terminal) return snapshot();
       if (event.error || ["error", "response.failed", "response.cancelled"].includes(event.type)) {
@@ -180,8 +200,11 @@
         if (response.error) throw apiError(response);
         text = responseText(response);
         if (text.length > MAX_RESPONSE_LENGTH) throw fail("Yanıt görüntülenemeyecek kadar büyük.", "response_too_large");
-        outputTokens = Number.isSafeInteger(response.usage?.output_tokens) && response.usage.output_tokens >= 0
-          ? response.usage.output_tokens : null;
+        const measured = providerUsage(response.usage);
+        inputTokens = measured?.inputTokens ?? null;
+        outputTokens = measured?.outputTokens ?? null;
+        totalTokens = measured?.totalTokens ?? null;
+        usageStatus = measured ? "reported" : response.usage === undefined || response.usage === null ? "unavailable" : "invalid";
         status = expected;
         incompleteReason = typeof response.incomplete_details?.reason === "string" ? response.incomplete_details.reason : "";
         terminal = true;
@@ -261,7 +284,7 @@
   }
 
   function init({ getKey = () => null, getModels = () => [], onComplete = () => {}, onAnnounce = () => {} } = {}) {
-    const ids = ["form", "key", "key-note", "model", "model-note", "prompt", "limit", "send", "stop", "output", "empty", "status", "elapsed", "first-token", "tokens", "error", "copy", "clear"];
+    const ids = ["form", "key", "key-note", "model", "model-note", "prompt", "limit", "send", "stop", "output", "empty", "status", "elapsed", "first-token", "input-tokens", "tokens", "total-tokens", "usage-source", "error", "copy", "clear"];
     const ui = Object.fromEntries(ids.map((id) => [id, document.getElementById(`playground-${id}`)]));
     if (ids.some((id) => !ui[id])) throw new Error("Playground markup is incomplete");
     const toggle = document.getElementById("playground-key-toggle");
@@ -279,6 +302,9 @@
     let abortReason = "";
     let output = "";
     let tokens = null;
+    let inputTokens = null;
+    let totalTokens = null;
+    let usageStatus = "idle";
     let disposed = false;
     const now = () => performance.now();
     function listen(node, event, listener) { node.addEventListener(event, listener); listeners.push(() => node.removeEventListener(event, listener)); }
@@ -287,6 +313,14 @@
       ui.elapsed.textContent = started ? `${((busy ? now() - started : elapsed) / 1000).toFixed(1)} sn` : "—";
       ui["first-token"].textContent = firstToken === null ? "—" : `${(firstToken / 1000).toFixed(2)} sn`;
       ui.tokens.textContent = tokens === null ? "—" : new Intl.NumberFormat("tr-TR").format(tokens);
+      ui["input-tokens"].textContent = inputTokens === null ? "—" : new Intl.NumberFormat("tr-TR").format(inputTokens);
+      ui["total-tokens"].textContent = totalTokens === null ? "—" : new Intl.NumberFormat("tr-TR").format(totalTokens);
+      ui["usage-source"].dataset.state = usageStatus;
+      ui["usage-source"].textContent = usageStatus === "reported" ? "Kaynak: sağlayıcı yanıtı · Giriş + çıkış toplamı doğrulandı."
+        : usageStatus === "pending" ? "Sağlayıcının kullanım verisi bekleniyor; akış parçaları token sayısı değildir."
+          : usageStatus === "invalid" ? "Sağlayıcının token verisi geçersiz; sayılar gösterilmedi."
+            : usageStatus === "unavailable" ? "Sağlayıcının token verisi alınamadı; kullanım sıfır kabul edilmedi."
+              : "Token sayıları yalnızca sağlayıcının doğrulanmış kullanım verisinden gösterilir.";
     }
     function renderOutput() {
       animation = undefined;
@@ -341,6 +375,12 @@
       updateKeyNote();
       updateModelNote();
     }
+    function setSelectedModel(model) {
+      if (busy || !models.some((item) => item.id === model)) return false;
+      ui.model.value = model;
+      updateModelNote();
+      return true;
+    }
     function clearKey() {
       if (controller && busy) { abortReason = "user"; controller.abort(); }
       ui.key.value = "";
@@ -362,6 +402,9 @@
       abortReason = "";
       output = "";
       tokens = null;
+      inputTokens = null;
+      totalTokens = null;
+      usageStatus = "pending";
       firstToken = null;
       elapsed = 0;
       started = now();
@@ -380,6 +423,9 @@
           if (snapshot.text && firstToken === null) firstToken = now() - started;
           output = snapshot.text;
           tokens = snapshot.outputTokens;
+          inputTokens = snapshot.inputTokens;
+          totalTokens = snapshot.totalTokens;
+          usageStatus = snapshot.usageStatus;
           if (output && !snapshot.terminal) status("Yanıt geliyor…", "streaming");
           scheduleOutput();
         } });
@@ -406,12 +452,14 @@
         if (animation !== undefined) { cancelAnimationFrame(animation); animation = undefined; }
         elapsed = now() - started;
         setBusy(false);
+        if (usageStatus === "pending") usageStatus = "unavailable";
         if (!output) ui.empty.textContent = outcome === "completed" ? "Sağlayıcı görünür bir metin döndürmedi."
           : outcome === "incomplete" ? "Görünür metin oluşmadan yanıt sınırına ulaşıldı."
             : outcome === "cancelled" ? "Test durduruldu."
               : outcome === "timeout" ? "Test zaman aşımına uğradı." : "Yanıt alınamadı. Hata ayrıntısını kontrol et.";
         renderOutput();
-        try { onComplete({ status: outcome, model: payload.model }); } catch { /* A dashboard refresh must not change the test result. */ }
+        try { onComplete({ status: outcome, model: payload.model, usageStatus,
+          usage: usageStatus === "reported" ? { input_tokens: inputTokens, output_tokens: tokens, total_tokens: totalTokens } : null }); } catch { /* A dashboard refresh must not change the test result. */ }
       }
     }
     listen(ui.form, "submit", run);
@@ -436,7 +484,7 @@
     });
     listen(ui.clear, "click", () => {
       if (busy) return;
-      output = ""; tokens = null; firstToken = null; started = 0; elapsed = 0;
+      output = ""; tokens = null; inputTokens = null; totalTokens = null; usageStatus = "idle"; firstToken = null; started = 0; elapsed = 0;
       ui.error.hidden = true;
       ui.empty.textContent = "Yanıt burada görünecek.";
       status("Hazır", "idle");
@@ -452,7 +500,7 @@
     setBusy(false);
     status("Hazır", "idle");
     renderOutput();
-    return Object.freeze({ setModels, clearKey, dispose() {
+    return Object.freeze({ setModels, setSelectedModel, clearKey, dispose() {
       if (disposed) return;
       disposed = true;
       clearKey();

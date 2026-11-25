@@ -11,7 +11,7 @@ const valid = { key, model: "gpt-6.1-sol", prompt: "Merhaba", maxOutputTokens: 5
 function final(text = "Merhaba 🌍", extra = {}) {
   return { id: "resp_playground", object: "response", status: "completed", output: [
     { id: "msg_one", type: "message", role: "assistant", content: [{ type: "output_text", text }] },
-  ], usage: { output_tokens: 11 }, ...extra };
+  ], usage: { input_tokens: 17, output_tokens: 11, total_tokens: 28 }, ...extra };
 }
 const frame = (value, separator = "\n") => `event: ${value.type}${separator}data: ${JSON.stringify(value)}${separator}${separator}`;
 function source(values, { open = false, stalledCancel = false, chunks } = {}) {
@@ -64,7 +64,7 @@ function playgroundFixture(fetchResponse = async () => { throw new Error("Unexpe
       return Object.values(starters);
     }
   }
-  const suffixes = ["form", "key", "key-note", "model", "model-note", "prompt", "limit", "send", "stop", "output", "empty", "status", "elapsed", "first-token", "tokens", "error", "copy", "clear", "key-toggle"];
+  const suffixes = ["form", "key", "key-note", "model", "model-note", "prompt", "limit", "send", "stop", "output", "empty", "status", "elapsed", "first-token", "input-tokens", "tokens", "total-tokens", "usage-source", "error", "copy", "clear", "key-toggle"];
   const ui = Object.fromEntries(suffixes.map((name) => [name, new Element()]));
   const starters = Object.fromEntries(["idea", "code", "edit"].map((name) => {
     const button = new Element("BUTTON");
@@ -118,6 +118,8 @@ test("prompt starters ignore connecting and streaming clicks and work again afte
   const submission = fixture.ui.form.emit("submit");
   assert.equal(fixture.requests.length, 1);
   assert.equal(fixture.ui.status.dataset.state, "loading");
+  for (const name of ['input-tokens', 'tokens', 'total-tokens']) assert.equal(fixture.ui[name].textContent, '—');
+  assert.equal(fixture.ui['usage-source'].dataset.state, 'pending');
   assert.equal(JSON.parse(fixture.requests[0][1].body).input, valid.prompt);
   async function assertIgnored() {
     for (const starter of Object.values(fixture.starters)) {
@@ -132,10 +134,15 @@ test("prompt starters ignore connecting and streaming clicks and work again afte
   stream.enqueue(Buffer.from(frame({ type: "response.output_text.delta", delta: "Merhaba" })));
   await new Promise(setImmediate);
   assert.equal(fixture.ui.status.dataset.state, "streaming");
+  for (const name of ['input-tokens', 'tokens', 'total-tokens']) assert.equal(fixture.ui[name].textContent, '—', 'SSE text chunks are not token counts');
   await assertIgnored();
   stream.enqueue(Buffer.from(frame({ type: "response.completed", response: final() })));
   await promptly(submission);
   assert.equal(fixture.ui.status.dataset.state, "complete");
+  assert.equal(fixture.ui['input-tokens'].textContent, '17');
+  assert.equal(fixture.ui.tokens.textContent, '11');
+  assert.equal(fixture.ui['total-tokens'].textContent, '28');
+  assert.equal(fixture.ui['usage-source'].dataset.state, 'reported');
   for (const starter of Object.values(fixture.starters)) assert.equal(starter.disabled, false);
   await fixture.starters.code.emit("click");
   assert.equal(fixture.ui.prompt.value, "JavaScript ile bir API isteği gönderen, hata yönetimi içeren kısa bir örnek yaz.");
@@ -228,6 +235,9 @@ test("terminal final text is authoritative and done snapshots never duplicate vi
   const result = accumulator.accept({ type: "response.completed", response: final() });
   assert.equal(result.text, "Merhaba 🌍");
   assert.equal(result.outputTokens, 11);
+  assert.equal(result.inputTokens, 17);
+  assert.equal(result.totalTokens, 28);
+  assert.equal(result.usageStatus, 'reported');
   assert.equal(result.terminal, true);
   assert.equal(accumulator.accept({ type: "response.output_text.delta", delta: "duplicate" }).text, "Merhaba 🌍");
   assert.equal(accumulator.finish().status, "completed");
@@ -237,10 +247,12 @@ test("out-of-order parts display in output order and final refusal text is retai
   const a = createResponseAccumulator();
   a.accept({ type: "response.output_text.delta", output_index: 1, content_index: 0, delta: "second" });
   assert.equal(a.accept({ type: "response.output_text.delta", output_index: 0, content_index: 0, delta: "first " }).text, "first second");
-  const response = final("", { output: [{ type: "message", content: [{ type: "refusal", refusal: "Cannot help." }] }], usage: { output_tokens: 0 } });
+  const response = final("", { output: [{ type: "message", content: [{ type: "refusal", refusal: "Cannot help." }] }], usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } });
   const result = a.accept({ type: "response.completed", response });
   assert.equal(result.text, "Cannot help.");
   assert.equal(result.outputTokens, 0);
+  assert.equal(result.inputTokens, 0);
+  assert.equal(result.totalTokens, 0);
 });
 
 test("incomplete responses retain partial output and real usage without pretending to complete", () => {
@@ -252,7 +264,90 @@ test("incomplete responses retain partial output and real usage without pretendi
   assert.equal(result.text, "partial");
   assert.equal(result.incompleteReason, "max_output_tokens");
   assert.equal(result.outputTokens, null);
+  assert.equal(result.inputTokens, null);
+  assert.equal(result.totalTokens, null);
+  assert.equal(result.usageStatus, 'unavailable');
   assert.throws(() => createResponseAccumulator().finish(), { code: "incomplete_stream" });
+});
+
+test('usage metrics require all consistent provider totals without type coercion', () => {
+  const validUsage = { input_tokens: 17, output_tokens: 11, total_tokens: 28 };
+  const assertUnknown = (usage, status = 'invalid') => {
+    const result = createResponseAccumulator().accept({ type: 'response.completed', response: final('Measured answer', { usage }) });
+    assert.equal(result.text, 'Measured answer');
+    assert.equal(result.status, 'completed', 'unavailable accounting does not rewrite the response outcome');
+    assert.equal(result.usageStatus, status);
+    assert.equal(result.inputTokens, null);
+    assert.equal(result.outputTokens, null);
+    assert.equal(result.totalTokens, null);
+  };
+  assertUnknown(undefined, 'unavailable');
+  assertUnknown(null, 'unavailable');
+  for (const field of ['input_tokens', 'output_tokens', 'total_tokens']) {
+    for (const value of [undefined, null, '', false, true, '0', -1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, [], {}]) {
+      assertUnknown({ ...validUsage, [field]: value });
+    }
+  }
+  assertUnknown({ ...validUsage, total_tokens: 29 });
+  assertUnknown({ input_tokens: Number.MAX_SAFE_INTEGER, output_tokens: 1, total_tokens: Number.MAX_SAFE_INTEGER });
+  assertUnknown({ output_tokens: 11 });
+});
+
+test('all provider usage detail counters are validated as subsets and never added to the total', () => {
+  const usage = { input_tokens: 17, output_tokens: 11, total_tokens: 28,
+    input_tokens_details: { cached_tokens: 8 }, output_tokens_details: { reasoning_tokens: 6 } };
+  const measured = createResponseAccumulator().accept({ type: 'response.completed', response: final('', { usage }) });
+  assert.equal(measured.inputTokens, 17);
+  assert.equal(measured.outputTokens, 11);
+  assert.equal(measured.totalTokens, 28);
+  for (const [name, ceiling] of [['input_tokens_details', 17], ['output_tokens_details', 11]]) {
+    for (const details of [null, [], false, 'details', { count: null }, { count: false }, { count: '1' },
+      { count: -1 }, { count: 0.5 }, { count: ceiling + 1 }, { count: {} }]) {
+      const result = createResponseAccumulator().accept({ type: 'response.completed', response: final('', { usage: { ...usage, [name]: details } }) });
+      assert.equal(result.usageStatus, 'invalid');
+      assert.equal(result.inputTokens, null);
+      assert.equal(result.outputTokens, null);
+      assert.equal(result.totalTokens, null);
+    }
+  }
+});
+
+test('playground displays verified usage, explicit zero and clears the metrics together', async (t) => {
+  const fixture = playgroundFixture(async () => source([{ type: 'response.completed', response: final() }]).response);
+  t.after(() => fixture.instance.dispose());
+  await fixture.ui.form.emit('submit');
+  assert.equal(fixture.ui['input-tokens'].textContent, '17');
+  assert.equal(fixture.ui.tokens.textContent, '11');
+  assert.equal(fixture.ui['total-tokens'].textContent, '28');
+  assert.match(fixture.ui['usage-source'].textContent, /Kaynak: sağlayıcı yanıtı/);
+  await fixture.ui.clear.emit('click');
+  for (const name of ['input-tokens', 'tokens', 'total-tokens']) assert.equal(fixture.ui[name].textContent, '—');
+  assert.equal(fixture.ui['usage-source'].dataset.state, 'idle');
+  const zero = playgroundFixture(async () => source([{ type: 'response.completed', response: final('', {
+    usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } }) }]).response);
+  t.after(() => zero.instance.dispose()); await zero.ui.form.emit('submit');
+  for (const name of ['input-tokens', 'tokens', 'total-tokens']) assert.equal(zero.ui[name].textContent, '0');
+  assert.equal(zero.ui['usage-source'].dataset.state, 'reported');
+});
+
+test('playground preserves a completed answer while explicitly suppressing invalid usage', async (t) => {
+  const fixture = playgroundFixture(async () => source([{ type: 'response.completed', response: final('Real answer', {
+    usage: { input_tokens: 17, output_tokens: 11, total_tokens: 27 } }) }]).response);
+  t.after(() => fixture.instance.dispose()); await fixture.ui.form.emit('submit');
+  assert.equal(fixture.ui.output.textContent, 'Real answer');
+  assert.equal(fixture.ui.status.dataset.state, 'complete');
+  assert.equal(fixture.ui['usage-source'].dataset.state, 'invalid');
+  for (const name of ['input-tokens', 'tokens', 'total-tokens']) assert.equal(fixture.ui[name].textContent, '—');
+});
+
+test('playground model selection is explicit, catalog bounded and sends no request', (t) => {
+  const fixture = playgroundFixture(); t.after(() => fixture.instance.dispose());
+  fixture.instance.setModels([{ id: 'gpt-6.1-sol' }, { id: 'gpt-6-astra' }]);
+  assert.equal(fixture.instance.setSelectedModel('gpt-6-astra'), true);
+  assert.equal(fixture.ui.model.value, 'gpt-6-astra');
+  assert.equal(fixture.instance.setSelectedModel('not-in-catalog'), false);
+  assert.equal(fixture.ui.model.value, 'gpt-6-astra');
+  assert.equal(fixture.requests.length, 0);
 });
 
 test("error and mismatched completion events never become successful output", () => {

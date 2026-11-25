@@ -2,7 +2,7 @@
   "use strict";
 
   const byId = (id) => document.getElementById(id);
-  const state = { user: null, users: [], key: null, secret: null, revealed: false, busy: false, daily: 1000000000, minute: 5, model: "gpt-6.1-sol", loaded: false, userMode: "create", view: "overview", usersLoadedAt: 0, lastRefreshAt: 0, lastRefreshAttempt: 0, stale: false, clockOffset: 0, resets: {}, remaining: {} };
+  const state = { user: null, users: [], key: null, secret: null, revealed: false, busy: false, daily: null, minute: null, model: "gpt-6.1-sol", exampleLanguage: "curl", loaded: false, userMode: "create", view: "overview", usersLoadedAt: 0, lastRefreshAt: 0, lastRefreshAttempt: 0, stale: false, clockOffset: 0, resets: {}, remaining: {}, usageStatus: "unavailable" };
   let toastTimeout;
   let refreshPromise;
   let usersPromise;
@@ -27,7 +27,36 @@
   const numberFormatter = new Intl.NumberFormat("tr-TR");
   const dateFormatter = new Intl.DateTimeFormat("tr-TR", { day: "numeric", month: "long", year: "numeric" });
   const formattedNumber = (number) => numberFormatter.format(number);
-  const safeNumber = (value, fallback) => Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : fallback;
+  const tokenCount = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null;
+  const countLabel = (value) => value === null ? "—" : formattedNumber(value);
+  const timestamp = (value) => {
+    if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)) return NaN;
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) && new Date(parsed).toISOString().replace(".000Z", "Z") === value.replace(".000Z", "Z") ? parsed : NaN;
+  };
+  const record = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+  function usageCounts(value, suffix = "") {
+    if (!record(value)) return null;
+    const input = tokenCount(value[`input_tokens${suffix}`]);
+    const output = tokenCount(value[`output_tokens${suffix}`]);
+    const total = tokenCount(value[`total_tokens${suffix}`]);
+    return input !== null && output !== null && total !== null && Number.isSafeInteger(input + output)
+      && total === input + output ? { input, output, total } : null;
+  }
+  function accountingRecord(value) {
+    if (!record(value) || value.source !== "provider_usage" || !["complete", "partial"].includes(value.status)
+      || value.quota_scope !== "application_daily" || value.provider_balance !== null
+      || value.provider_balance_status !== "not_exposed" || value.reserved_kind !== "admission_estimate"
+      || tokenCount(value.unknown_requests_today) === null || typeof value.legacy_usage_unknown !== "boolean"
+      || (value.status === "complete" && (value.unknown_requests_today > 0 || value.legacy_usage_unknown))) return null;
+    if (value.last_settlement !== null) {
+      const receipt = value.last_settlement;
+      if (!record(receipt) || !usageCounts(receipt) || !Number.isFinite(timestamp(receipt.recorded_at))
+        || !(receipt.response_id === null || typeof receipt.response_id === "string")
+        || !(receipt.model === null || typeof receipt.model === "string")) return null;
+    }
+    return value;
+  }
   const dateLabel = (value) => {
     if (!value) return "";
     const date = new Date(value);
@@ -97,12 +126,57 @@
   function updateExample() {
     const key = state.secret && state.revealed ? state.secret : "YOUR_KEY";
     byId("code-example").textContent = exampleFor(key);
-    if (byId("overview-code")) byId("overview-code").textContent = exampleFor(key);
+    if (byId("overview-code")) byId("overview-code").textContent = exampleFor(key, state.exampleLanguage);
+    const language = { curl: ["cURL", "quickstart.sh"], javascript: ["JavaScript", "quickstart.mjs"], python: ["Python", "quickstart.py"] }[state.exampleLanguage];
+    if (byId("example-language-tag")) byId("example-language-tag").textContent = language[0];
+    const file = byId("example-file");
+    if (file) {
+      const icon = file.querySelector("svg");
+      file.replaceChildren(...(icon ? [icon] : []), document.createTextNode(language[1]));
+    }
+    document.querySelectorAll("[data-example-language]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.exampleLanguage === state.exampleLanguage)));
     if (byId("codex-config")) byId("codex-config").textContent = window.KlyCodexConfig.buildConfig(
       state.secret && state.revealed ? state.secret : undefined, state.model);
   }
 
-  function exampleFor(key) {
+  function exampleFor(key, language = "curl") {
+    if (language === "javascript") return [
+      'const response = await fetch("https://klyapi.vercel.app/api/v1/responses", {',
+      '  method: "POST",',
+      '  headers: {',
+      `    Authorization: "Bearer ${key}",`,
+      '    "Content-Type": "application/json",',
+      '  },',
+      '  body: JSON.stringify({',
+      `    model: "${state.model}",`,
+      '    input: "Merhaba!",',
+      '    max_output_tokens: 256,',
+      '  }),',
+      '});',
+      'if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);',
+      'console.log(await response.json());',
+    ].join("\n");
+    if (language === "python") return [
+      'import json',
+      'import urllib.request',
+      '',
+      'payload = {',
+      `    "model": "${state.model}",`,
+      '    "input": "Merhaba!",',
+      '    "max_output_tokens": 256,',
+      '}',
+      'request = urllib.request.Request(',
+      '    "https://klyapi.vercel.app/api/v1/responses",',
+      '    data=json.dumps(payload).encode("utf-8"),',
+      '    headers={',
+      `        "Authorization": "Bearer ${key}",`,
+      '        "Content-Type": "application/json",',
+      '    },',
+      '    method="POST",',
+      ')',
+      'with urllib.request.urlopen(request) as response:',
+      '    print(json.dumps(json.load(response), ensure_ascii=False, indent=2))',
+    ].join("\n");
     return [
       "curl https://klyapi.vercel.app/api/v1/responses \\",
       `  -H "Authorization: Bearer ${key}" \\`,
@@ -176,7 +250,10 @@
         use.type = "button";
         use.addEventListener("click", () => { setModel(id); selectView("setup"); });
         const footer = element("div", "model-catalog-note");
-        footer.append(element("span", "", item.note || "Yanıt süreleri ve araç desteği sağlayıcıya bağlıdır."), use);
+        const tryModel = element("button", "button subtle", "Modeli dene");
+        tryModel.type = "button";
+        tryModel.addEventListener("click", () => { setModel(id); selectView("playground"); });
+        footer.append(element("span", "", item.note || "Yanıt süreleri ve araç desteği sağlayıcıya bağlıdır."), use, tryModel);
         card.append(heading, details, footer);
         catalog.append(card);
       }
@@ -206,6 +283,73 @@
     byId("model-id").value = model;
     updateModelNote();
     updateExample();
+    playground?.setSelectedModel?.(model);
+  }
+
+  function renderUsage(usage) {
+    const accounting = accountingRecord(usage?.accounting);
+    const counts = accounting && usageCounts(usage, "_today");
+    const reserved = tokenCount(usage?.reserved_tokens_today);
+    const valid = Boolean(counts && reserved !== null && Number.isSafeInteger(counts.total + reserved));
+    state.usageStatus = valid ? accounting.status : "unavailable";
+    const partial = state.usageStatus === "partial";
+    const lowerBound = (value) => valid ? `${partial ? "En az " : ""}${formattedNumber(value)}` : "—";
+    const reportedRemaining = tokenCount(usage?.remaining_tokens_today);
+    const remaining = valid && !partial && state.daily !== null && reportedRemaining !== null
+      && reportedRemaining === Math.max(0, state.daily - counts.total - reserved) ? reportedRemaining : null;
+    state.remaining = { day: remaining };
+
+    byId("usage-count").textContent = lowerBound(counts?.total);
+    byId("input-token-count").textContent = lowerBound(counts?.input);
+    byId("output-token-count").textContent = lowerBound(counts?.output);
+    byId("remaining-token-count").textContent = countLabel(remaining);
+    byId("usage-source").textContent = valid ? "Sağlayıcının bildirdiği kullanım · yalnızca bu uygulama" : "Kullanım kaynağı doğrulanamadı";
+    byId("usage-status").textContent = partial ? "Kısmi kayıt · en az" : valid ? "Sağlayıcı kaydı doğrulandı" : "Kullanım doğrulanamadı";
+    byId("usage-status").dataset.state = state.usageStatus;
+    const coverage = [];
+    if (!valid) coverage.push("Token kayıtları eksik veya geçersiz; kullanım sıfır kabul edilmedi.");
+    else if (partial) {
+      if (accounting.unknown_requests_today > 0) coverage.push(`${formattedNumber(accounting.unknown_requests_today)} isteğin token kullanımı doğrulanamadı.`);
+      if (accounting.legacy_usage_unknown) coverage.push("Önceki isteklerin token ayrıntıları bilinmiyor.");
+      coverage.push("Görünen sayılar yalnızca kaydedilen kullanımdır; kullanılabilir kota doğrulanamıyor.");
+    } else if (remaining === null) coverage.push("Kaydedilen kullanım doğrulandı; kullanılabilir günlük kota doğrulanamadı.");
+    coverage.push("Günlük sınır uygulama kotasıdır. Sağlayıcının satın alınmış bakiyesi bildirilmez.");
+    byId("usage-coverage").textContent = coverage.join(" ");
+    const meter = byId("usage-progress");
+    meter.hidden = !valid || partial || state.daily === null || state.daily < 1 || remaining === null;
+    if (meter.hidden) meter.removeAttribute("value");
+    else { meter.max = state.daily; meter.value = counts.total; }
+    byId("reserved-token-note").textContent = valid && reserved > 0
+      ? `${formattedNumber(reserved)} token tahmini geçici rezervasyon. Gerçek kullanım değildir; tamamlanan isteklerin sağlayıcı sayılarıyla değiştirilir.` : "";
+    byId("reserved-token-note").hidden = !valid || reserved === 0;
+    for (const [period, field] of [["hour", "used_this_hour"], ["day", "used_today"], ["week", "used_this_week"]]) {
+      byId(`usage-requests-${period}`).textContent = countLabel(tokenCount(usage?.[field]));
+    }
+
+    const composition = byId("usage-composition");
+    composition.hidden = !valid || counts.total === 0;
+    const inputShare = composition.hidden ? null : counts.input / counts.total * 100;
+    const outputShare = composition.hidden ? null : counts.output / counts.total * 100;
+    byId("usage-input-share").style.width = inputShare === null ? "" : `${inputShare}%`;
+    byId("usage-output-share").style.width = outputShare === null ? "" : `${outputShare}%`;
+    const compositionLabel = composition.hidden ? "Dağılım için doğrulanmış token kaydı yok."
+      : `Kaydedilen kullanım: ${formattedNumber(counts.input)} giriş + ${formattedNumber(counts.output)} çıkış = ${formattedNumber(counts.total)} token.`;
+    composition.setAttribute("aria-label", compositionLabel);
+    byId("usage-composition-label").textContent = compositionLabel;
+
+    const receipt = valid ? accounting.last_settlement : null;
+    byId("usage-receipt").hidden = !receipt;
+    for (const id of ["receipt-time", "receipt-model", "receipt-response", "receipt-input", "receipt-output", "receipt-total"]) byId(id).textContent = "—";
+    byId("receipt-time").removeAttribute("datetime");
+    if (receipt) {
+      byId("receipt-time").textContent = new Intl.DateTimeFormat("tr-TR", { dateStyle: "medium", timeStyle: "medium", timeZone: "UTC" }).format(new Date(receipt.recorded_at)) + " UTC";
+      byId("receipt-time").setAttribute("datetime", receipt.recorded_at);
+      byId("receipt-model").textContent = receipt.model || "Bildirilmedi";
+      byId("receipt-response").textContent = receipt.response_id || "Bildirilmedi";
+      byId("receipt-input").textContent = formattedNumber(receipt.input_tokens);
+      byId("receipt-output").textContent = formattedNumber(receipt.output_tokens);
+      byId("receipt-total").textContent = formattedNumber(receipt.total_tokens);
+    }
   }
 
   function render(data) {
@@ -216,36 +360,23 @@
       || !state.secret.startsWith(data.key.prefix));
     if (!data.key || keyChanged || secretMismatch) clearSensitiveKey();
     state.key = data.key || null;
-    state.daily = safeNumber(data.limits?.daily_tokens, 1000000000);
-    state.minute = safeNumber(data.limits?.requests_per_minute, 5);
+    state.daily = tokenCount(data.limits?.daily_tokens);
+    state.minute = tokenCount(data.limits?.requests_per_minute);
     renderModels(data.service);
     state.loaded = true;
-    const input = safeNumber(data.usage?.input_tokens_today, 0);
-    const output = safeNumber(data.usage?.output_tokens_today, 0);
-    const usage = safeNumber(data.usage?.total_tokens_today, input + output);
-    const reserved = safeNumber(data.usage?.reserved_tokens_today, 0);
-    const remaining = safeNumber(data.usage?.remaining_tokens_today, Math.max(0, state.daily - usage - reserved));
-    const serverTime = Date.parse(data.usage?.server_time || data.server_time);
+    const serverTime = timestamp(data.usage?.server_time || data.server_time);
     state.clockOffset = Number.isFinite(serverTime) ? serverTime - Date.now() : 0;
-    state.resets = { day: Date.parse(data.usage?.day_resets_at) };
-    state.remaining = { day: remaining };
+    state.resets = { day: timestamp(data.usage?.day_resets_at) };
     state.lastRefreshAt = Date.now();
     state.lastRefreshAttempt = state.lastRefreshAt;
     state.stale = false;
 
-    byId("daily-limit").textContent = formattedNumber(state.daily);
-    byId("daily-token-credit").textContent = state.daily === 1000000000 ? "1 milyar" : formattedNumber(state.daily);
-    byId("empty-daily-limit").textContent = formattedNumber(state.daily);
-    byId("minute-limit").textContent = formattedNumber(state.minute);
-    byId("usage-count").textContent = formattedNumber(usage);
-    if (byId("remaining-token-count")) byId("remaining-token-count").textContent = formattedNumber(remaining);
+    byId("daily-limit").textContent = countLabel(state.daily);
+    byId("daily-token-credit").textContent = state.daily === 1000000000 ? "1 milyar" : countLabel(state.daily);
+    byId("empty-daily-limit").textContent = countLabel(state.daily);
+    byId("minute-limit").textContent = countLabel(state.minute);
     byId("model-id").value = state.model;
-    byId("usage-progress").max = state.daily || 1;
-    byId("usage-progress").value = usage;
-    byId("input-token-count").textContent = formattedNumber(input);
-    byId("output-token-count").textContent = formattedNumber(output);
-    byId("reserved-token-note").textContent = reserved > 0 ? `${formattedNumber(reserved)} token devam eden istekler için ayrıldı.` : "";
-    byId("reserved-token-note").hidden = reserved === 0;
+    renderUsage(data.usage);
     byId("key-loading").hidden = true;
     byId("key-error").hidden = true;
     byId("key-empty").hidden = Boolean(state.key);
@@ -287,8 +418,10 @@
     byId("usage-updated").classList.toggle("stale", state.stale);
     const now = Date.now() + state.clockOffset;
     const reset = state.resets.day;
-    const when = Number.isFinite(reset) ? reset <= now ? "Yenilenme zamanı geldi" : `${durationLabel(reset - now)} sonra yenilenir` : "Her gün 00:00 UTC’de yenilenir";
-    byId("remaining-label").textContent = `${formattedNumber(state.remaining.day)} token kaldı · ${when}`;
+    const when = Number.isFinite(reset) ? reset <= now ? "Yenilenme zamanı geldi" : `${durationLabel(reset - now)} sonra yenilenir` : "Yenilenme zamanı bildirilmedi";
+    byId("remaining-label").textContent = state.usageStatus === "partial" ? "Kayıt kısmi · Kullanılabilir günlük kota doğrulanamıyor"
+      : state.remaining.day === null ? "Kullanılabilir günlük kota doğrulanamadı"
+        : `${formattedNumber(state.remaining.day)} token uygulama kotası kaldı · ${when}`;
   }
 
   function scheduleRefresh() {
@@ -389,6 +522,7 @@
         : "Bağlantını kontrol edip yeniden deneyebilirsin.";
       byId("remaining-label").textContent = "Kullanım bilgisi şu anda alınamıyor";
       byId("usage-updated").textContent = "Kullanım bilgisi alınamadı";
+      renderUsage(undefined);
     } finally {
       byId("refresh-usage").disabled = false;
       byId("refresh-usage").setAttribute("aria-busy", "false");
@@ -549,6 +683,7 @@
       playground = window.KlyPlayground?.init?.({ getKey: () => state.secret, getModels: () => modelCatalog,
         onComplete: () => { if (!suspended && state.user) refresh({ background: true }); }, onAnnounce: toast });
       playground?.setModels?.(modelCatalog);
+      playground?.setSelectedModel?.(state.model);
     };
     if (window.KlyPlayground?.init) { initialize(); return; }
     const moduleSource = byId("playground-view")?.dataset.module;
@@ -629,7 +764,7 @@
       info.append(name, element("span", "user-created", dateLabel(user.created_at) || "Hesap oluşturuldu"));
       identity.append(info);
       const limits = element("div", "user-limits");
-      limits.append(element("span", "", `${formattedNumber(user.daily_tokens ?? 1000000000)} token / gün`), element("span", "", `${formattedNumber(user.requests_per_minute ?? 5)} istek / dakika`));
+      limits.append(element("span", "", `${countLabel(tokenCount(user.daily_tokens))} token / gün · uygulama kotası`), element("span", "", `${countLabel(tokenCount(user.requests_per_minute))} istek / dakika`));
       const status = element("span", `user-state${user.enabled ? "" : " disabled"}`);
       status.append(element("span"), document.createTextNode(user.enabled ? "Aktif" : "Kapalı"));
       const own = user.username.toLowerCase() === state.user.username.toLowerCase();
@@ -683,7 +818,7 @@
     byId("user-minute").disabled = mode === "password";
     byId("user-minute").value = user?.requests_per_minute ?? 5;
     byId("user-dialog-title").textContent = mode === "create" ? "Kullanıcı ekle" : mode === "quota" ? "Anlık hız sınırı" : "Şifreyi sıfırla";
-    byId("user-dialog-description").textContent = mode === "create" ? "Kullanıcı adı ve şifre belirle. Her hesap günlük ücretsiz 1 milyar tokenla başlar." : mode === "quota" ? "Dakikalık istek hızını güncelle. Günlük 1 milyar token hakkı tüm hesaplar için aynıdır." : "Kullanıcının eski şifresi geçersiz olacak. Yeni şifreyi güvenli bir kanaldan ilet.";
+    byId("user-dialog-description").textContent = mode === "create" ? "Kullanıcı adı ve şifre belirle. Her hesaba günlük 1 milyar token uygulama kotası uygulanır; bu sağlayıcı bakiyesi değildir." : mode === "quota" ? "Dakikalık istek hızını güncelle. Günlük 1 milyar token uygulama kotası tüm hesaplar için aynıdır." : "Kullanıcının eski şifresi geçersiz olacak. Yeni şifreyi güvenli bir kanaldan ilet.";
     byId("save-user").textContent = mode === "create" ? "Kullanıcı oluştur" : "Değişiklikleri kaydet";
     byId("user-dialog").showModal();
     if (mode === "password") byId("user-password").focus();
@@ -866,8 +1001,13 @@
   byId("revoke-key").addEventListener("click", () => revokeKey(false));
   byId("reveal-key").addEventListener("click", () => { state.revealed = !state.revealed; renderSecret(); });
   byId("copy-key").addEventListener("click", () => { if (state.secret) copy(state.secret, "API anahtarın kopyalandı"); });
-  byId("copy-example").addEventListener("click", () => copy(exampleFor(state.secret || "YOUR_KEY"), "İstek örneği kopyalandı"));
-  if (byId("copy-overview-code")) byId("copy-overview-code").addEventListener("click", () => copy(exampleFor(state.secret || "YOUR_KEY"), "İstek örneği kopyalandı"));
+  document.querySelectorAll("[data-example-language]").forEach((button) => button.addEventListener("click", () => {
+    if (!["curl", "javascript", "python"].includes(button.dataset.exampleLanguage)) return;
+    state.exampleLanguage = button.dataset.exampleLanguage;
+    updateExample();
+  }));
+  byId("copy-example").addEventListener("click", () => copy(exampleFor(state.secret && state.revealed ? state.secret : "YOUR_KEY"), "İstek örneği kopyalandı"));
+  if (byId("copy-overview-code")) byId("copy-overview-code").addEventListener("click", () => copy(exampleFor(state.secret && state.revealed ? state.secret : "YOUR_KEY", state.exampleLanguage), "İstek örneği kopyalandı"));
   byId("copy-codex-config")?.addEventListener("click", () => copy(codexConfig(), configNotice("kopyalandı")));
   byId("download-codex-config")?.addEventListener("click", downloadCodexConfig);
   document.querySelectorAll("[data-copy-target]").forEach((button) => button.addEventListener("click", () => copy(byId(button.dataset.copyTarget).value, "Kopyalandı")));
