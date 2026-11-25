@@ -16,12 +16,18 @@ function terminal(extra = {}) {
     usage: { input_tokens: 17, output_tokens: 11, total_tokens: 28,
       input_tokens_details: { cached_tokens: 8 }, output_tokens_details: { reasoning_tokens: 6 } }, ...extra };
 }
-function request(path, stream = false) {
+function request(path, stream = false, extra = {}) {
   const payload = path === "v1/responses" ? { input: "Merhaba 世界", max_output_tokens: 128 }
     : { messages: [{ role: "user", content: "Merhaba 世界" }], max_tokens: 128 };
   return { method: "POST", query: { path }, headers: { authorization: `Bearer kly_${"T".repeat(43)}`,
     "content-type": "application/json" },
-  async *[Symbol.asyncIterator]() { yield Buffer.from(JSON.stringify({ ...payload, model: "gpt-6.1-sol", stream })); } };
+  async *[Symbol.asyncIterator]() { yield Buffer.from(JSON.stringify({ ...payload, model: "gpt-6.1-sol", stream, ...extra })); } };
+}
+function providerExtensionUsage() {
+  return { input_tokens: 4230,
+    input_tokens_details: { cached_tokens: 2786, cache_write_tokens: 0, cache_write_tokens_details: { type: "object" } },
+    output_tokens: 8, output_tokens_details: { reasoning_tokens: 0 }, total_tokens: 4238,
+    attribution: { items: { type: "object" }, request_fields: { type: "object" } } };
 }
 function sink(onWrite = () => {}) {
   const text = (chunk) => ArrayBuffer.isView(chunk) ? Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength).toString("utf8") : String(chunk);
@@ -73,6 +79,67 @@ test("missing and inconsistent terminal usage never becomes success or a quota-s
           assert.doesNotMatch(res.body, /quota_storage|response.completed|message_stop|finish_reason/);
           assert.equal(unknown, 1);
         }
+      }
+    }
+  }
+});
+
+test("structured provider usage extensions preserve strict real counts without adding consumption", () => {
+  const usage = providerExtensionUsage();
+  const before = structuredClone(usage);
+  assert.deepEqual(actualTokens({ usage }), { input_tokens: 4230, output_tokens: 8, total_tokens: 4238 });
+  assert.deepEqual(usage, before, "validation must not mutate provider metadata");
+  for (const [field, counter, value] of [
+    ["input_tokens_details", "cached_tokens", 4231],
+    ["input_tokens_details", "cached_tokens", null],
+    ["input_tokens_details", "cache_write_tokens", -1],
+    ["input_tokens_details", "cache_write_tokens", { type: "object" }],
+    ["output_tokens_details", "reasoning_tokens", 9],
+    ["output_tokens_details", "reasoning_tokens", 0.5],
+  ]) {
+    const invalid = providerExtensionUsage();
+    invalid[field][counter] = value;
+    assert.throws(() => actualTokens({ usage: invalid }), { code: "invalid_token_usage" });
+  }
+  assert.throws(() => actualTokens({ usage: { ...usage, total_tokens: 4239 } }), { code: "invalid_token_usage" });
+  assert.throws(() => actualTokens({ usage: { ...usage, input_tokens: "4230" } }), { code: "invalid_token_usage" });
+});
+
+test("real-shaped structured usage reconciles once across JSON, SSE and all supported protocols", async () => {
+  for (const path of ["v1/responses", "v1/chat/completions", "v1/messages"]) {
+    for (const stream of [false, true]) {
+      for (const sse of [false, true]) {
+        const response = terminal({ usage: providerExtensionUsage() });
+        let settlements = 0;
+        const dispatch = createHandler({ isConfigured: () => true,
+          reserve: async () => ({ ok: true, reservation: { id: "test" } }),
+          settle: async (_ticket, usage) => {
+            assert.deepEqual(usage, { input_tokens: 4230, output_tokens: 8, total_tokens: 4238 });
+            settlements++;
+          },
+          release: async () => assert.fail("Validated actual usage cannot be refunded"),
+          markUnknown: async () => assert.fail("Structured optional metadata does not make real counts unknown") });
+        global.fetch = async () => new Response(sse ? `data: ${JSON.stringify({ type: "response.completed", response })}\n\n`
+          : JSON.stringify(response), { headers: { "content-type": sse ? "text/event-stream" : "application/json" } });
+        const res = sink(frame => {
+          if (/response.completed|finish_reason|message_stop/.test(frame)) assert.equal(settlements, 1);
+        });
+        await dispatch(request(path, stream, path === "v1/chat/completions" && stream
+          ? { stream_options: { include_usage: true } } : {}), res);
+        assert.equal(res.statusCode, 200);
+        assert.equal(settlements, 1);
+        assert.doesNotMatch(res.body, /invalid_token_usage|token_accounting_unavailable/);
+        const payloads = stream ? res.body.split(/\r?\n\r?\n/).flatMap(block => {
+          const data = block.split(/\r?\n/).find(line => line.startsWith("data: "))?.slice(6);
+          return data && data !== "[DONE]" ? [JSON.parse(data)] : [];
+        }) : [JSON.parse(res.body)];
+        const delivered = payloads.find(value => path === "v1/responses"
+          ? (value.type === "response.completed" || value.object === "response")
+          : value.usage && (path === "v1/chat/completions" || !stream || value.type === "message_delta"));
+        const usage = path === "v1/responses" && stream ? delivered.response.usage : delivered.usage;
+        assert.equal(usage[path === "v1/chat/completions" ? "prompt_tokens" : "input_tokens"], 4230);
+        assert.equal(usage[path === "v1/chat/completions" ? "completion_tokens" : "output_tokens"], 8);
+        if (path !== "v1/messages") assert.equal(usage.total_tokens, 4238);
       }
     }
   }

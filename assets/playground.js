@@ -142,13 +142,13 @@
       || ![value.input_tokens, value.output_tokens, value.total_tokens].every(count)
       || !Number.isSafeInteger(value.input_tokens + value.output_tokens)
       || value.total_tokens !== value.input_tokens + value.output_tokens) return null;
-    // Detail counters are subsets, not additional token charges. Validate all
-    // supplied details before displaying any number from this usage object.
+    // Token detail counters are subsets, not additional token charges. Other
+    // provider detail fields may contain structured extension metadata.
     for (const [name, ceiling] of [["input_tokens_details", value.input_tokens], ["output_tokens_details", value.output_tokens]]) {
-      if (value[name] === undefined) continue;
+      if (value[name] === undefined || value[name] === null) continue;
       const details = value[name];
       if (!details || typeof details !== "object" || Array.isArray(details)
-        || !Object.values(details).every((number) => count(number) && number <= ceiling)) return null;
+        || !Object.entries(details).every(([field, number]) => !field.endsWith("_tokens") || (count(number) && number <= ceiling))) return null;
     }
     return { inputTokens: value.input_tokens, outputTokens: value.output_tokens, totalTokens: value.total_tokens };
   }

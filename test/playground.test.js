@@ -293,22 +293,52 @@ test('usage metrics require all consistent provider totals without type coercion
   assertUnknown({ output_tokens: 11 });
 });
 
-test('all provider usage detail counters are validated as subsets and never added to the total', () => {
+test('provider token detail counters are validated as subsets and never added to the total', () => {
   const usage = { input_tokens: 17, output_tokens: 11, total_tokens: 28,
     input_tokens_details: { cached_tokens: 8 }, output_tokens_details: { reasoning_tokens: 6 } };
   const measured = createResponseAccumulator().accept({ type: 'response.completed', response: final('', { usage }) });
   assert.equal(measured.inputTokens, 17);
   assert.equal(measured.outputTokens, 11);
   assert.equal(measured.totalTokens, 28);
-  for (const [name, ceiling] of [['input_tokens_details', 17], ['output_tokens_details', 11]]) {
-    for (const details of [null, [], false, 'details', { count: null }, { count: false }, { count: '1' },
-      { count: -1 }, { count: 0.5 }, { count: ceiling + 1 }, { count: {} }]) {
+  const nullable = createResponseAccumulator().accept({ type: 'response.completed', response: final('', {
+    usage: { ...usage, input_tokens_details: null, output_tokens_details: null } }) });
+  assert.equal(nullable.usageStatus, 'reported', 'null detail containers contain no contradictory counters');
+  assert.equal(nullable.totalTokens, 28);
+  for (const [name, ceiling, counter] of [['input_tokens_details', 17, 'cached_tokens'], ['output_tokens_details', 11, 'reasoning_tokens']]) {
+    for (const details of [[], false, 'details', { [counter]: null }, { [counter]: false }, { [counter]: '1' },
+      { [counter]: -1 }, { [counter]: 0.5 }, { [counter]: ceiling + 1 }, { [counter]: {} }]) {
       const result = createResponseAccumulator().accept({ type: 'response.completed', response: final('', { usage: { ...usage, [name]: details } }) });
       assert.equal(result.usageStatus, 'invalid');
       assert.equal(result.inputTokens, null);
       assert.equal(result.outputTokens, null);
       assert.equal(result.totalTokens, null);
     }
+  }
+});
+
+test('structured provider extensions retain actual input output and total usage in the accumulator and metrics', async (t) => {
+  const usage = { input_tokens: 4230,
+    input_tokens_details: { cached_tokens: 2786, cache_write_tokens: 0, cache_write_tokens_details: { type: 'object' } },
+    output_tokens: 8, output_tokens_details: { reasoning_tokens: 0 }, total_tokens: 4238,
+    attribution: { items: { type: 'object' }, request_fields: { type: 'object' } } };
+  const result = createResponseAccumulator().accept({ type: 'response.completed', response: final('Real provider answer', { usage }) });
+  assert.equal(result.usageStatus, 'reported');
+  assert.equal(result.inputTokens, 4230);
+  assert.equal(result.outputTokens, 8);
+  assert.equal(result.totalTokens, 4238);
+  const fixture = playgroundFixture(async () => source([{ type: 'response.completed', response: final('Real provider answer', { usage }) }]).response);
+  t.after(() => fixture.instance.dispose()); await fixture.ui.form.emit('submit');
+  assert.equal(fixture.ui['input-tokens'].textContent, '4.230');
+  assert.equal(fixture.ui.tokens.textContent, '8');
+  assert.equal(fixture.ui['total-tokens'].textContent, '4.238');
+  assert.equal(fixture.ui['usage-source'].dataset.state, 'reported');
+  for (const value of [null, false, '0', -1, 0.5, 4231, Number.MAX_SAFE_INTEGER + 1]) {
+    const contradictory = { ...usage, input_tokens_details: { ...usage.input_tokens_details, cache_write_tokens: value } };
+    const invalid = createResponseAccumulator().accept({ type: 'response.completed', response: final('', { usage: contradictory }) });
+    assert.equal(invalid.usageStatus, 'invalid');
+    assert.equal(invalid.inputTokens, null);
+    assert.equal(invalid.outputTokens, null);
+    assert.equal(invalid.totalTokens, null);
   }
 });
 
