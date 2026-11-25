@@ -40,15 +40,28 @@ Panel ve giriş sayfası ortak `console.css` ve fotoğraflı görünümü sağla
 
 ## Kalıcı depolama ve güvenlik
 
-Hesaplar, parola hash'leri, oturum hash'leri, API anahtarı hash'leri ve kotalar özel Vercel Blob deposunda saklanır. Tam parolalar veya tam API anahtarları kalıcı depoya yazılmaz. Okumalar `useCache:false` ile en son sürümü getirir; güncellemeler ETag `ifMatch` ile karşılaştırılıp yazılır. Aynı çalışan sunucudaki örtüşen değişiklikler, en çok 64 işlem içeren tek kalıcı yazımda birleştirilir; ayrı sunucular arasındaki çakışmalar güncel veri yeniden okunarak denenir. Her işlem kendi doğrulamasından geçer ve başarılı sonuçlar yalnızca kalıcı yazımdan sonra döner. Hatalı işlemler diğer işlemlere kısmi değişiklik sızdırmaz; depolama arızasında erişim kapalı kalır.
+Hesaplar, parola hash'leri, oturum hash'leri, API anahtarı hash'leri ve kotalar seçili kalıcı depoda saklanır. `DATABASE_URL` tanımlıysa birincil depo PostgreSQL'dir; yalnızca bu değişken tanımlı değilse özel Vercel Blob yolu seçilir. PostgreSQL bağlantısı, sorgusu, şeması veya verisi hatalı olduğunda Blob'a otomatik geçiş yapılmaz; erişim kapalı kalır. Tam parolalar veya tam API anahtarları kalıcı depoya yazılmaz.
 
-Bu depo, küçük ve davetli kullanıcı grupları için tek JSON kaydı kullanır. Kullanıcı üst sınırı, giriş denemesi sınırı, oturum ömrü ve kayıt boyutu kodda sınırlandırılmıştır. Daha yüksek trafik için aynı arayüz ilişkisel veritabanına taşınabilir.
+Her iki backend aynı, en fazla 4.000.000 UTF-8 baytlık JSON hesap snapshot'ını kullanır. PostgreSQL bunu `public.klyapi_state` tablosundaki tek kaydın `payload TEXT` alanında tutar. `BIGINT` sürümü hassasiyet kaybını önlemek için metin olarak okunur ve ETag arayüzüne aktarılır; güncelleme, beklenen sürümü koşul olarak kullanan atomik compare-and-swap (CAS) ile sürümü artırır. Blob geri dönüş modunda okumalar `useCache:false` ile en son sürümü getirir; güncellemeler ETag `ifMatch` koşuluyla yazılır. Aynı çalışan sunucudaki örtüşen değişiklikler, en çok 64 işlem içeren tek kalıcı yazımda birleştirilir; ayrı sunucular arasındaki çakışmalar güncel veri yeniden okunarak denenir. Her işlem kendi doğrulamasından geçer ve başarılı sonuçlar yalnızca kalıcı yazımdan sonra döner. Hatalı işlemler diğer işlemlere kısmi değişiklik sızdırmaz.
+
+PostgreSQL erişimi yalnızca sunucuda, resmi Neon sürücüsünün HTTPS SQL yolu ve parametreli sorgularla yapılır. Tek sorgu en fazla 10 saniyelik, depolama işlemleri sınırlı toplam süre bütçesiyle çalışır; iptal sinyali sürücüye iletilir. Bağlantı dizgesi, SQL, parametreler ve hesap verisi içerebilen ham sürücü hataları dışarı verilmez. Sonucu belirsiz yazmalar körlemesine tekrarlanmaz. Kullanıcı üst sınırı, giriş denemesi sınırı, oturum ömrü ve kayıt boyutu kodda sınırlandırılmıştır; bu sürüm hesapları ayrı ilişkisel satırlara ayırmaz.
+
+PostgreSQL şeması ve ilk snapshot açık bir başlatma/geçiş işlemiyle hazırlanmalıdır. Normal istekler otomatik DDL çalıştırmaz ve PostgreSQL'e başlangıç yöneticisi veya boş hesap verisi eklemez. Tablo ya da tek hesap kaydı eksikse istek 503 ile kapanır; mevcut veri kendiliğinden yeniden oluşturulmaz.
 
 Parolalar Node.js scrypt ile ayrı rastgele salt kullanılarak hash'lenir. Oturum çerezi Secure, HttpOnly ve SameSite=Strict'tir. Parola değişiminde eski oturumlar geçersiz olur. Yönetici işlemleri her istekte sunucuda yetki kontrolünden geçer; arayüzde düğme gizlemek tek başına yetkilendirme değildir. Kullanıcı bilgilerini değiştiren isteklere origin ve JSON boyut kontrolü uygulanır.
 
 ## Vercel kurulumu
 
-Özel Blob deposunu projeye bağla:
+Önerilen PostgreSQL yolunda Neon bağlantı dizgesini yalnızca sunucunun `DATABASE_URL` ayarı olarak kullan. Etkinleştirmeden önce:
+
+1. Açık başlatma/geçiş adımında `lib/postgres-blob.js` içindeki `CREATE_TABLE_SQL` ile şemayı oluştur.
+2. Erişilebilir mevcut deponun doğrulanmış snapshot'ını, yalnızca hedef kayıt yokken koşullu olarak ekle. Yeni boş kurulum açıkça onaylandıysa ilk yönetici snapshot'ını mevcut `ADMIN_USERNAME` ve `ADMIN_PASSWORD_HASH` ayarlarıyla ayrı bir başlatma adımında oluştur; bu işlem normal istek yolunun parçası değildir. Var olan kaydı koşulsuz ezme.
+3. Hedefteki veriyi ve sürümü yeniden okuyup doğrula; sonra Vercel ve büyük istek geçidini aynı `DATABASE_URL` ile etkinleştir. Eski depoyu silme. Eski snapshot'a erişilemiyorsa kullanıcılar ve anahtarlar aktarılmış sayılmaz; yeni kurulumda yeniden oluşturulmaları gerekir.
+4. Giriş, anahtar oluşturma, gerçek model çağrısı, kullanım/kota hesabı ve iptal akışını canlıda ayrıca doğrula.
+
+25 Kasım 2026 durumu: ücretsiz Neon projesi oluşturuldu; yeni kurulum onaylandı, etkinleştirme ve kalıcı depolama/kota akışının canlı doğrulaması bekliyor. Eski Blob verisi değiştirilmeden korunur; bu not tamamlanmış veri aktarımı iddiası değildir.
+
+Yalnızca `DATABASE_URL` kullanmayacaksan özel Blob deposunu isteğe bağlı geri dönüş backend'i olarak projeye bağla:
 
 ```sh
 vercel storage create klyapi-private --type blob --access private --region iad1
@@ -58,15 +71,16 @@ vercel storage update klyapi-private --auth token --add-rw-token --environment p
 
 | Ortam değişkeni | Amaç |
 | --- | --- |
-| `BLOB_STORE_ID` | Bağlı özel Vercel Blob deposu |
-| `BLOB_READ_WRITE_TOKEN` | Özel depoya yalnızca sunucudan erişim; tanımlıysa doğrudan bu kimlik kullanılır, aksi halde OIDC |
+| `DATABASE_URL` | Yalnızca sunucuda kullanılan Neon PostgreSQL bağlantı dizgesi; tanımlıysa birincil ve tek seçilen backend. Şema ve ilk snapshot önceden açık başlatma/geçişle hazırlanmalıdır |
+| `BLOB_STORE_ID` | Yalnızca `DATABASE_URL` tanımlı değilken kullanılan bağlı özel Vercel Blob deposu |
+| `BLOB_READ_WRITE_TOKEN` | Yalnızca Blob modunda, özel depoya sunucudan erişim; tanımlıysa doğrudan bu kimlik kullanılır, aksi halde OIDC |
 | `XINGCHI_SOL_API_KEY` | Sol için yalnızca sunucuda kullanılan kaynak anahtar |
 | `XINGCHI_ASTRA_API_KEY` | Astra için ayrı kaynak anahtar; Sol anahtarı kullanılmaz |
 | `XINGCHI_API_KEY` | İsteğe bağlı eski Sol anahtarı geri dönüşü |
 | `XINGCHI_ASTRA_BALANCE_REQUIRED` | Son Astra testinin bakiye uyarısı; bakiye sonrası doğrulanınca kaldırılır |
 | `KEY_HASH_SECRET` | Giriş denemesi anahtarlarını hash'lemek için ayrı rastgele sır |
-| `ADMIN_USERNAME` | İlk yönetici kullanıcı adı, yalnızca ilk veri oluşturulurken |
-| `ADMIN_PASSWORD_HASH` | İlk yöneticinin scrypt parola hash'i; düz parola değildir |
+| `ADMIN_USERNAME` | İlk yönetici kullanıcı adı; PostgreSQL için açık başlatma adımında, Blob modunda yalnızca ilk veri oluşturulurken |
+| `ADMIN_PASSWORD_HASH` | İlk yöneticinin scrypt parola hash'i; düz parola değildir. PostgreSQL isteği bu ayarla otomatik veri oluşturmaz |
 | `DEFAULT_OUTPUT_TOKENS` | İstemci çıktı limiti belirtmediğinde kullanılır; varsayılan 2048 |
 | `MAX_OUTPUT_TOKENS` | İsteğe bağlı yönetici tavanı; tanımsızsa istemcinin geçerli pozitif tam sayı limiti aynen upstream'e iletilir |
 | `UPSTREAM_AUTH_MODE` | `authorization` (varsayılan) veya `x-api-key` |
@@ -75,9 +89,9 @@ Başlangıç yönetici bilgileri kaynak kodunda bulunmaz. İlk veri oluşturuldu
 
 Modelin çıktı sınırını upstream belirler. Proxy, açıkça verilen token limitlerine varsayılan bir tavan uygulamaz. Yönetici tavanı tanımlıysa, limitsiz istekler için varsayılan da bu tavana indirilir. Token ortam değişkenleri pozitif tam sayı olmalıdır; hatalı yapılandırma 503 döndürür.
 
-Eşzamanlı kota yazımları ETag ile korunur. Depodan gelen hem ETag uyuşmazlığı hem de açıkça reddedilen koşullu yazma çakışması, güncel veri yeniden okunarak tekrar denenir; belirsiz ağ hatalarında yazma körlemesine tekrarlanmaz.
+Eşzamanlı kota yazımları PostgreSQL'de sürüm CAS'i, Blob modunda ETag ile korunur. Sürüm/ETag uyuşmazlığı ve açıkça reddedilen koşullu yazma çakışması, güncel veri yeniden okunarak tekrar denenir; belirsiz ağ hatalarında yazma körlemesine tekrarlanmaz.
 
-Blob SDK'nin kendi otomatik tekrarları kapalıdır; sınırlı okuma ve açık hız sınırı tekrarlarını depolama katmanı yönetir. Yazma yanıtı kaybolursa, iki saniyelik ayrı bir okuma bütçesi içinde hem benzersiz `commit_id` hem de tam veri karşılaştırılarak işlemin tamamlandığı doğrulanabilir. Eşleşme yoksa işlem 503 ile kapanır; kota veya oturum işlemi yeniden uygulanmaz. Girişte hız sınırı kontrolünden alınan özel kullanıcı özeti tekrar kullanılarak başarılı girişin depolama işlemleri beşten dörde indirilmiştir.
+Blob geri dönüş modunda SDK'nin kendi otomatik tekrarları kapalıdır; her iki backend'de sınırlı okuma ve açık hız sınırı tekrarlarını ortak depolama katmanı yönetir. Yazma yanıtı kaybolursa, iki saniyelik ayrı bir okuma bütçesi içinde hem benzersiz `commit_id` hem de tam veri karşılaştırılarak işlemin tamamlandığı doğrulanabilir. Eşleşme yoksa işlem 503 ile kapanır; kota veya oturum işlemi yeniden uygulanmaz. Girişte hız sınırı kontrolünden alınan özel kullanıcı özeti tekrar kullanılarak başarılı girişin depolama işlemleri beşten dörde indirilmiştir.
 
 ## İstemci uyumluluğu
 
@@ -91,7 +105,7 @@ Doğrulanmış `response.completed` veya `response.incomplete` olayı geldiğind
 
 Vercel Functions girişinde uygulamanın aktarım sınırı 4.400.000 bayttır; zstd, gzip, deflate ve Brotli açıldıktan sonra JSON sınırı 64 MiB'dir. Vercel isteği işleve ulaşmadan reddedebilir: yalnızca uygulamadaki sayıyı büyütmek `FUNCTION_PAYLOAD_TOO_LARGE` hatasını çözmez. Vercel'in yeni 20 MiB isteğe bağlı sınırı da 50 MB hedefinin altındadır. Bozuk sıkıştırma 400, bilinmeyen veya üst üste kodlama 415, boyut aşımı 413 döndürür; kota ayrılmadan reddedilir.
 
-`npm start` ile çalışan ayrı Node.js 24 geçidi, **toplam HTTP/JSON gövdesinde 50 MiB (52.428.800 bayt)** kabul eder; base64 görseller ve JSON alanları bu toplama dahildir. Sıkıştırılmış gövde de, açılmış JSON da bu sınırı geçemez. Aynı kişisel anahtarları ve özel Blob hesap deposunu kullanır; gerçek token hesabı ve Responses / Chat Completions / Messages akışları korunur. Varsayılan tek eşzamanlı POST, okuma öncesi anahtar doğrulaması, bellek toplama ve JSON karmaşıklık sınırları küçük sunucuda bellek kullanımını sınırlar.
+`npm start` ile çalışan ayrı Node.js 24 geçidi, **toplam HTTP/JSON gövdesinde 50 MiB (52.428.800 bayt)** kabul eder; base64 görseller ve JSON alanları bu toplama dahildir. Sıkıştırılmış gövde de, açılmış JSON da bu sınırı geçemez. Aynı kişisel anahtarları ve kotayı paylaşması için Vercel ile aynı kalıcı backend'e yapılandırılmalıdır: `DATABASE_URL` tanımlıysa aynı PostgreSQL veritabanı, tanımlı değilse aynı özel Blob deposu. PostgreSQL hatasında Blob'a geçmez. Gerçek token hesabı ve Responses / Chat Completions / Messages akışları korunur. Varsayılan tek eşzamanlı POST, okuma öncesi anahtar doğrulaması, bellek toplama ve JSON karmaşıklık sınırları küçük sunucuda bellek kullanımını sınırlar.
 
 Render Free hizmeti `https://klyapi-large-requests.onrender.com` adresinde kurulmuştur. 25 Kasım 2026 doğrudan canlı doğrulamasında **16/16 kontrol** geçti: tam 50 MiB Content-Length aktarımı `14375 ms`, chunked aktarım `13396 ms` sürdü; küçük gerçek Sol JSON/SSE üretimi ve paylaşılan token kotası da doğrulandı. Koşullu yönlendirme mevcut `klyapi.vercel.app` üretim adresine yayımlandı ve **üretimde 50 MiB Content-Length taşımasının 4/4 kontrolü geçti**: gövde uygulamaya ulaştı, `X-KlyAPI-Ingress: large` işaretiyle bilerek geçersiz modelin beklenen `400` yanıtı döndü, `413` oluşmadı ve kota tüketilmedi. İstemciden ölçülen `71245 ms` toplamının büyük kısmı gövdenin istemci tarafından yazımını içerir; sunucu işlem süresi veya hız garantisi değildir. Büyük gövde taşıma testi, modelin aynı boyutta bağlamdan üretim yapabildiğinin garantisi değildir.
 
