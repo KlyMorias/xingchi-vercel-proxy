@@ -12,8 +12,8 @@ function eventTarget() {
     removeEventListener(type, callback) { listeners.get(type)?.delete(callback); },
     emit(type, event = {}) { for (const callback of [...(listeners.get(type) || [])]) callback(event); } };
 }
-function node({ tag = "section", top = 100, height = 200, width = 1000, hidden = false, form = false, image = false } = {}) {
-  const classes = new Set();
+function node({ tag = "section", className = "", top = 100, height = 200, width = 1000, hidden = false, form = false, image = false } = {}) {
+  const classes = new Set(className.split(/\s+/).filter(Boolean));
   const properties = new Map();
   const element = { ...eventTarget(), tagName: tag.toUpperCase(), isConnected: true, hidden,
     form, image, box: { top, left: 0, width, height }, parent: null, writes: 0,
@@ -30,19 +30,21 @@ function node({ tag = "section", top = 100, height = 200, width = 1000, hidden =
       return null;
     },
     querySelector(selector) { return selector === ".cinematic-image" && image ? {} : selector === "form" && form ? {} : null; },
+    matches(selector) { return selector.split(",").some((part) => classes.has(part.trim().slice(1))); },
     getBoundingClientRect() { return { ...this.box, bottom: this.box.top + this.box.height }; },
     getClientRects() { return this.hidden ? [] : [this.getBoundingClientRect()]; } };
   return element;
 }
-function fixture({ reduce = false, fine = true, intersection = true, media = true, candidates = [], photo = node({ image: true, height: 400 }), catalog = node() } = {}) {
+function fixture({ reduce = false, fine = true, intersection = true, media = true, authPending = false, candidates = [], photo = node({ image: true, height: 400 }), catalog = node() } = {}) {
   const frames = new Map();
   const observers = [];
   const mutations = [];
   let nextFrame = 1;
   const root = node();
+  const body = node({ tag: "body", className: authPending ? "auth-pending" : "" });
   const reducedMedia = { ...eventTarget(), matches: reduce };
   const fineMedia = { ...eventTarget(), matches: fine };
-  const document = { ...eventTarget(), documentElement: root, hidden: false, readyState: "complete",
+  const document = { ...eventTarget(), documentElement: root, body, hidden: false, readyState: "complete",
     querySelectorAll(selector) { return selector.startsWith(".cinematic-hero") ? [photo] : candidates; },
     getElementById(id) { return id === "model-catalog" ? catalog : null; } };
   const window = { ...eventTarget(), innerHeight: 800,
@@ -198,6 +200,71 @@ test("pagehide and hidden pages stop work, while BFCache restore reinstates inpu
   f.document.hidden = false;
   f.document.emit("visibilitychange");
   assert.equal(f.root.classList.contains("has-motion"), true);
+});
+
+test("completed entrance remains settled after visibility and BFCache restores while ambient motion resumes", () => {
+  for (const className of ["hero-bottom", "auth-visual-copy"]) {
+    const f = fixture();
+    const target = node({ className });
+    assert.equal(f.root.classList.contains("motion-entered"), false);
+    f.document.emit("animationend", { animationName: "photo-drift", target });
+    f.document.emit("animationend", { animationName: "soft-arrival", target: node({ className: "hero-meta" }) });
+    assert.equal(f.root.classList.contains("motion-entered"), false, "Only the final entrance sentinel settles the introduction");
+    f.document.emit("animationend", { animationName: "soft-arrival", target });
+    assert.equal(f.root.classList.contains("motion-entered"), true);
+    f.document.hidden = true;
+    f.document.emit("visibilitychange");
+    assert.equal(f.root.classList.contains("motion-entered"), true);
+    assert.equal(f.root.classList.contains("has-motion"), false);
+    f.document.hidden = false;
+    f.document.emit("visibilitychange");
+    f.window.emit("pagehide", { persisted: true });
+    f.window.emit("pageshow", { persisted: true });
+    assert.equal(f.root.classList.contains("motion-entered"), true);
+    assert.equal(f.root.classList.contains("has-motion"), true);
+    assert.equal(f.photo.classList.contains("motion-in-view"), true);
+    assert.equal(f.frames.size, 0, "Restored ambient motion must not start a background frame loop");
+  }
+});
+
+test("suspending an exposed entrance settles it rather than replaying its mask on return", () => {
+  for (const type of ["visibilitychange", "pagehide"]) {
+    const f = fixture();
+    assert.equal(f.root.classList.contains("motion-entered"), false);
+    if (type === "visibilitychange") { f.document.hidden = true; f.document.emit(type); }
+    else f.window.emit(type, { persisted: true });
+    assert.equal(f.root.classList.contains("motion-entered"), true);
+    if (type === "visibilitychange") { f.document.hidden = false; f.document.emit(type); }
+    else f.window.emit("pageshow", { persisted: true });
+    assert.equal(f.root.classList.contains("motion-entered"), true);
+    assert.equal(f.root.classList.contains("has-motion"), true);
+    assert.equal(f.frames.size, 0);
+  }
+});
+
+test("suspension behind the auth cover preserves the first real hero entrance", () => {
+  const f = fixture({ authPending: true });
+  const target = node({ className: "hero-bottom" });
+  f.document.emit("animationend", { animationName: "soft-arrival", target });
+  assert.equal(f.root.classList.contains("motion-entered"), false);
+  f.document.hidden = true; f.document.emit("visibilitychange");
+  f.document.hidden = false; f.document.emit("visibilitychange");
+  f.window.emit("pagehide", { persisted: true });
+  f.window.emit("pageshow", { persisted: true });
+  assert.equal(f.root.classList.contains("motion-entered"), false, "A paused, unrevealed hero must still get its first entrance");
+  f.document.body.classList.remove("auth-pending");
+  f.document.emit("animationend", { animationName: "soft-arrival", target });
+  assert.equal(f.root.classList.contains("motion-entered"), true);
+});
+
+test("initial reduced motion keeps the introduction settled when motion is enabled later", () => {
+  const f = fixture({ reduce: true });
+  assert.equal(f.root.classList.contains("has-motion"), false);
+  assert.equal(f.root.classList.contains("motion-entered"), true);
+  f.reduce(false);
+  assert.equal(f.root.classList.contains("has-motion"), true);
+  assert.equal(f.root.classList.contains("motion-entered"), true);
+  assert.equal(f.frames.size, 0);
 });
 
 test("view changes and scoped catalog insertions discover new visible targets", () => {

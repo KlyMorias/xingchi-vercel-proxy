@@ -38,6 +38,17 @@
   function clearPhoto(node) {
     for (const property of ["--pointer-x", "--pointer-y", "--scroll-shift"]) node.style.removeProperty(property);
   }
+  function finishEntrance() {
+    // This flag survives motion suspension. CSS settles only the introductory
+    // shutter/text, while ambient photo and ribbon movement may resume.
+    root.classList.add("motion-entered");
+  }
+  function entranceEnded(event) {
+    if (event.animationName !== "soft-arrival" || event.pseudoElement
+        || !event.target?.matches?.(".hero-bottom, .auth-visual-copy")
+        || document.body?.classList.contains("auth-pending") || !visibleBox(event.target)) return;
+    finishEntrance();
+  }
   function reveal(node) {
     node.classList.remove("reveal-pending");
     node.classList.add("is-visible");
@@ -111,6 +122,9 @@
     });
   }
   function stop() {
+    // Finish an interrupted, already exposed entrance rather than remasking
+    // content on return. A hero still behind the auth gate has not entered.
+    if (active && !document.body?.classList.contains("auth-pending")) finishEntrance();
     active = false;
     root.classList.remove("has-motion");
     if (frame) window.cancelAnimationFrame(frame);
@@ -131,7 +145,10 @@
     photos.clear();
   }
   function start() {
-    if (active || suspended || document.hidden || !reduced || reduced.matches || !window.requestAnimationFrame) return;
+    if (active || suspended || document.hidden || !reduced || !window.requestAnimationFrame) return;
+    // A page first viewed with reduced motion stays exposed if that preference
+    // changes later in the same session.
+    if (reduced.matches) { finishEntrance(); return; }
     active = true;
     root.classList.add("has-motion");
     if (window.IntersectionObserver) {
@@ -146,6 +163,7 @@
     listen(window, "resize", () => schedule(true), { passive: true });
     listen(window, "hashchange", () => schedule(true));
     listen(window, "popstate", () => schedule(true));
+    listen(document, "animationend", entranceEnded);
     // pushState-based tab changes do not emit hashchange. Scan after the
     // application's click/keyboard handlers have made the target view visible.
     listen(document, "click", (event) => { if (event.target?.closest?.("a, button")) schedule(true); });

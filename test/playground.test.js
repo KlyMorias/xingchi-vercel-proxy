@@ -1,6 +1,10 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
 const { validateInput, safeMessage, createSseParser, createResponseAccumulator, consumeResponse } = require("../assets/playground");
+const playgroundSource = fs.readFileSync(path.join(__dirname, "../assets/playground.js"), "utf8");
 
 const key = "kly_" + "a".repeat(42) + "_";
 const valid = { key, model: "gpt-6.1-sol", prompt: "Merhaba", maxOutputTokens: 512 };
@@ -25,6 +29,135 @@ async function promptly(promise) {
     timer = setTimeout(() => reject(new Error("Playground waited for EOF after a terminal event")), 500);
   })]); } finally { clearTimeout(timer); }
 }
+
+function playgroundFixture(fetchResponse = async () => { throw new Error("Unexpected generation"); }) {
+  let document;
+  class Element {
+    constructor(tagName = "DIV") {
+      this.tagName = tagName;
+      this.value = "";
+      this.textContent = "";
+      this.hidden = false;
+      this.disabled = false;
+      this.type = "password";
+      this.dataset = {};
+      this.children = [];
+      this.listeners = new Map();
+      this.attributes = new Map();
+      this.classList = { toggle() {} };
+    }
+    addEventListener(type, listener) {
+      if (!this.listeners.has(type)) this.listeners.set(type, new Set());
+      this.listeners.get(type).add(listener);
+    }
+    removeEventListener(type, listener) { this.listeners.get(type)?.delete(listener); }
+    emit(type) {
+      // Deliberately invoke even disabled controls to exercise the busy guard.
+      return Promise.all([...(this.listeners.get(type) || [])].map((listener) => listener({ preventDefault() {}, target: this })));
+    }
+    setAttribute(name, value) { this.attributes.set(name, value); }
+    replaceChildren() { this.children = []; }
+    append(child) { this.children.push(child); }
+    focus() { document.activeElement = this; }
+    querySelectorAll(selector) {
+      assert.equal(selector, "button[data-playground-prompt]");
+      return Object.values(starters);
+    }
+  }
+  const suffixes = ["form", "key", "key-note", "model", "model-note", "prompt", "limit", "send", "stop", "output", "empty", "status", "elapsed", "first-token", "tokens", "error", "copy", "clear", "key-toggle"];
+  const ui = Object.fromEntries(suffixes.map((name) => [name, new Element()]));
+  const starters = Object.fromEntries(["idea", "code", "edit"].map((name) => {
+    const button = new Element("BUTTON");
+    button.type = "button";
+    button.dataset.playgroundPrompt = name;
+    return [name, button];
+  }));
+  document = { activeElement: null, getElementById(id) { return ui[id.replace(/^playground-/, "")] || null; }, createElement(tag) { return new Element(tag.toUpperCase()); } };
+  const window = new Element();
+  const requests = [];
+  const module = { exports: {} };
+  const frames = new Map();
+  let nextFrame = 0;
+  vm.runInNewContext(playgroundSource, { module, window, document, TextDecoder, AbortController, performance: { now: () => 1000 },
+    fetch: (...args) => { requests.push(args); return fetchResponse(...args); },
+    requestAnimationFrame(callback) { const id = ++nextFrame; frames.set(id, callback); return id; },
+    cancelAnimationFrame(id) { frames.delete(id); }, setTimeout, clearTimeout, setInterval, clearInterval,
+  }, { filename: "assets/playground.js" });
+  ui.key.value = key;
+  ui.model.value = valid.model;
+  ui.prompt.value = valid.prompt;
+  ui.limit.value = String(valid.maxOutputTokens);
+  const instance = module.exports.init({ getModels: () => [{ id: valid.model }] });
+  return { ui, starters, document, requests, instance };
+}
+
+test("prompt starters fill useful Turkish drafts, focus the prompt and never generate on click", async (t) => {
+  const fixture = playgroundFixture();
+  t.after(() => fixture.instance.dispose());
+  const expected = {
+    idea: "Yeni bir uygulama fikrini; hedef kullanıcı, temel özellikler ve ilk sürüm adımlarıyla geliştir.",
+    code: "JavaScript ile bir API isteği gönderen, hata yönetimi içeren kısa bir örnek yaz.",
+    edit: "Aşağıdaki metni daha açık ve akıcı hale getir:\n\n",
+  };
+  for (const [name, text] of Object.entries(expected)) {
+    await fixture.starters[name].emit("click");
+    assert.equal(fixture.ui.prompt.value, text);
+    assert.equal(fixture.document.activeElement, fixture.ui.prompt);
+    assert.equal(fixture.ui.status.dataset.state, "idle");
+    assert.equal(fixture.requests.length, 0);
+  }
+});
+
+test("prompt starters ignore connecting and streaming clicks and work again after a terminal response", async (t) => {
+  let resolveFetch;
+  const pendingResponse = new Promise((resolve) => { resolveFetch = resolve; });
+  let stream;
+  const body = new ReadableStream({ start(controller) { stream = controller; } });
+  const fixture = playgroundFixture(() => pendingResponse);
+  t.after(() => fixture.instance.dispose());
+  const submission = fixture.ui.form.emit("submit");
+  assert.equal(fixture.requests.length, 1);
+  assert.equal(fixture.ui.status.dataset.state, "loading");
+  assert.equal(JSON.parse(fixture.requests[0][1].body).input, valid.prompt);
+  async function assertIgnored() {
+    for (const starter of Object.values(fixture.starters)) {
+      assert.equal(starter.disabled, true);
+      await starter.emit("click");
+      assert.equal(fixture.ui.prompt.value, valid.prompt);
+      assert.equal(fixture.document.activeElement, null);
+    }
+  }
+  await assertIgnored();
+  resolveFetch(new Response(body, { headers: { "content-type": "text/event-stream" } }));
+  stream.enqueue(Buffer.from(frame({ type: "response.output_text.delta", delta: "Merhaba" })));
+  await new Promise(setImmediate);
+  assert.equal(fixture.ui.status.dataset.state, "streaming");
+  await assertIgnored();
+  stream.enqueue(Buffer.from(frame({ type: "response.completed", response: final() })));
+  await promptly(submission);
+  assert.equal(fixture.ui.status.dataset.state, "complete");
+  for (const starter of Object.values(fixture.starters)) assert.equal(starter.disabled, false);
+  await fixture.starters.code.emit("click");
+  assert.equal(fixture.ui.prompt.value, "JavaScript ile bir API isteği gönderen, hata yönetimi içeren kısa bir örnek yaz.");
+  assert.equal(fixture.document.activeElement, fixture.ui.prompt);
+  assert.equal(fixture.requests.length, 1);
+});
+
+test("prompt starters recover after a failed request and dispose removes their listeners", async (t) => {
+  const fixture = playgroundFixture(async () => { throw new Error("Offline"); });
+  t.after(() => fixture.instance.dispose());
+  await fixture.ui.form.emit("submit");
+  assert.equal(fixture.ui.status.dataset.state, "error");
+  for (const starter of Object.values(fixture.starters)) assert.equal(starter.disabled, false);
+  await fixture.starters.edit.emit("click");
+  assert.equal(fixture.ui.prompt.value, "Aşağıdaki metni daha açık ve akıcı hale getir:\n\n");
+  assert.equal(fixture.requests.length, 1);
+  fixture.instance.dispose();
+  fixture.ui.prompt.value = "Korunan taslak";
+  await fixture.starters.idea.emit("click");
+  assert.equal(fixture.ui.prompt.value, "Korunan taslak");
+  assert.equal(fixture.ui.key.value, "");
+});
 
 test("playground only submits a catalog model, bounded prompt and personal key without putting credentials in payload", () => {
   assert.deepEqual(validateInput(valid), { model: valid.model, input: "Merhaba", max_output_tokens: 512, stream: true, store: false });

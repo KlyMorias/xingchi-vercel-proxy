@@ -135,3 +135,17 @@ test("navigation roots and the authentication content gate remain present", () =
   assert.ok(document.nodes.find((node) => node.tag === "body")?.attrs.class.split(/\s+/).includes("auth-pending"));
   requireIds(document, ["auth-cover", "auth-status", "retry-auth"], "Authentication content gate");
 });
+
+test("compact navigation stays named and playground starters never submit the form", () => {
+  const document = documents["key.html"];
+  assert.equal(document.ids.get("open-command")?.attrs["aria-label"], "Hızlı geçiş");
+  const group = document.nodes.find((node) => node.attrs.class?.split(/\s+/).includes("playground-starters"));
+  assert.equal(group?.attrs.role, "group");
+  assert.equal(group?.attrs["aria-label"], "Örnek mesajlar");
+  const starters = descendants(group).filter((node) => Object.hasOwn(node.attrs, "data-playground-prompt"));
+  assert.deepEqual(starters.map((node) => node.attrs["data-playground-prompt"]), ["idea", "code", "edit"]);
+  for (const button of starters) {
+    assert.equal(button.tag, "button");
+    assert.equal(button.attrs.type, "button", "A starter must not spend tokens by submitting");
+  }
+});

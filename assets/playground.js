@@ -7,6 +7,11 @@
 
   const MODEL_IDS = Object.freeze(["gpt-6.1-sol", "gpt-6-astra"]);
   const MODEL_NAMES = Object.freeze({ "gpt-6.1-sol": "GPT 6.1 Sol", "gpt-6-astra": "GPT 6 Astra" });
+  const PROMPT_STARTERS = Object.freeze({
+    idea: "Yeni bir uygulama fikrini; hedef kullanıcı, temel özellikler ve ilk sürüm adımlarıyla geliştir.",
+    code: "JavaScript ile bir API isteği gönderen, hata yönetimi içeren kısa bir örnek yaz.",
+    edit: "Aşağıdaki metni daha açık ve akıcı hale getir:\n\n",
+  });
   const MAX_EVENT_LENGTH = 2_000_000;
   const MAX_RESPONSE_LENGTH = 8_000_000;
   const TIMEOUT_MS = 120_000;
@@ -260,6 +265,7 @@
     const ui = Object.fromEntries(ids.map((id) => [id, document.getElementById(`playground-${id}`)]));
     if (ids.some((id) => !ui[id])) throw new Error("Playground markup is incomplete");
     const toggle = document.getElementById("playground-key-toggle");
+    const starters = [...ui.form.querySelectorAll("button[data-playground-prompt]")];
     const listeners = [];
     let models = [];
     let busy = false;
@@ -297,6 +303,7 @@
       ui.stop.disabled = !value;
       ui.stop.hidden = !value;
       for (const name of ["key", "model", "prompt", "limit", "clear"]) ui[name].disabled = value;
+      for (const starter of starters) starter.disabled = value;
       if (toggle) toggle.disabled = value;
       ui.form.setAttribute("aria-busy", String(value));
     }
@@ -408,6 +415,11 @@
       }
     }
     listen(ui.form, "submit", run);
+    for (const starter of starters) listen(starter, "click", () => {
+      if (busy || disposed || !Object.hasOwn(PROMPT_STARTERS, starter.dataset.playgroundPrompt)) return;
+      ui.prompt.value = PROMPT_STARTERS[starter.dataset.playgroundPrompt];
+      ui.prompt.focus();
+    });
     listen(ui.stop, "click", () => { if (busy) { abortReason = "user"; controller.abort(); } });
     listen(ui.key, "input", updateKeyNote);
     listen(ui.model, "change", updateModelNote);

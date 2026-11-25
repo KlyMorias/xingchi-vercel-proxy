@@ -5,13 +5,14 @@
   const password = document.getElementById("login-password");
   const button = document.getElementById("login-submit");
   const message = document.getElementById("login-message");
+  const toggle = document.getElementById("toggle-password");
   let busy = false;
-  document.getElementById("toggle-password").addEventListener("click", (event) => {
-    const visible = password.type === "password";
+  function setPasswordVisible(visible) {
     password.type = visible ? "text" : "password";
-    event.currentTarget.setAttribute("aria-label", visible ? "Şifreyi gizle" : "Şifreyi göster");
-    event.currentTarget.setAttribute("aria-pressed", String(visible));
-  });
+    toggle.setAttribute("aria-label", visible ? "Şifreyi gizle" : "Şifreyi göster");
+    toggle.setAttribute("aria-pressed", String(visible));
+  }
+  toggle.addEventListener("click", () => setPasswordVisible(password.type === "password"));
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (busy || !form.reportValidity()) return;
@@ -40,5 +41,5 @@
   });
   fetch("/api/auth", { credentials: "same-origin", cache: "no-store", headers: { Accept: "application/json" } })
     .then((response) => { if (response.ok) window.location.replace("/key"); }).catch(() => {});
-  window.addEventListener("pagehide", () => { password.value = ""; password.type = "password"; });
+  window.addEventListener("pagehide", () => { password.value = ""; setPasswordVisible(false); });
 })();
