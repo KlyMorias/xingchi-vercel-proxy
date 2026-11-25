@@ -2,3 +2,8 @@
 .env*
 test/
 node_modules/
+server.cjs
+Dockerfile
+.dockerignore
+render.yaml
+docs/

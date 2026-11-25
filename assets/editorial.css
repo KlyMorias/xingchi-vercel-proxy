@@ -1,0 +1,187 @@
+/* Photographic black-and-white surfaces. Core console controls stay native. */
+.cinematic-hero {
+  position:relative;isolation:isolate;display:flex;flex-direction:column;justify-content:space-between;
+  min-height:480px;margin-bottom:0;padding:32px 46px 34px;overflow:hidden;
+  border:1px solid #ffffff14;border-radius:5px;background:#111;color:#fff;
+}
+.hero-image-wrap,.auth-visual-media {position:absolute;inset:0;z-index:-3;overflow:hidden;transform:scale(1.025)}
+.cinematic-image {
+  display:block;width:100%;height:100%;object-fit:cover;object-position:62% 48%;filter:grayscale(1) contrast(1.1);
+  transform:translate3d(var(--pointer-x,0px),calc(var(--pointer-y,0px) + var(--scroll-shift,0px)),0) scale(1.12);
+  transition:transform .8s cubic-bezier(.18,.7,.2,1);will-change:transform;
+}
+.hero-shade {position:absolute;inset:0;z-index:-2;background:linear-gradient(90deg,#000b 0%,#0006 36%,#0000 75%),linear-gradient(0deg,#0008,#0000 65%);pointer-events:none}
+.hero-shutter {display:none;position:absolute;inset:0;z-index:5;background:#070707;transform-origin:bottom;pointer-events:none}
+.hero-meta {display:flex;align-items:center;justify-content:space-between;gap:16px;position:relative;font-size:10px;letter-spacing:1.7px;color:#e0e0e0}
+.hero-meta>span:first-child {display:inline-flex;align-items:center;gap:10px}
+.hero-meta>span:first-child::before {content:"";width:26px;height:1px;background:#fff9}
+.hero-meta>span:last-child {font-family:var(--mono);font-size:9px;letter-spacing:1.1px;color:#d0d0d0}
+.hero-content {position:relative;max-width:690px;padding:32px 0 18px}
+.hero-title {font-size:clamp(62px,6.5vw,92px);line-height:.98;letter-spacing:-5px;font-weight:500;overflow:visible}
+.hero-title-line {display:block;overflow:hidden;padding-bottom:9px;margin-bottom:-9px}
+.hero-title-line>span {display:inline-block}
+.hero-title-line:last-child>span {font-family:Georgia,"Times New Roman",serif;font-style:italic;font-weight:400;letter-spacing:-4.4px;padding:0 12px 5px 1px}
+.hero-bottom {display:flex;align-items:flex-end;justify-content:space-between;gap:26px;position:relative}
+.hero-summary {max-width:340px;margin-bottom:19px;color:#d5d5d5;font-size:13px;line-height:1.8}
+.hero-actions {display:flex;align-items:center;flex-wrap:wrap;gap:24px}
+.hero-cta {display:inline-flex;align-items:center;justify-content:space-between;gap:26px;min-height:46px;padding:7px 8px 7px 19px;border:1px solid #fff;border-radius:999px;background:#fff;color:#111;font-size:12px;font-weight:550;transition:background .2s,box-shadow .2s}
+.action-circle {display:grid;place-items:center;flex-shrink:0;width:30px;height:30px;border-radius:50%;background:#151515;color:#fff;transition:transform .3s,background .3s}
+.action-circle svg {width:14px;height:14px;transform:rotate(-35deg);transition:transform .3s}
+.hero-cta:hover {background:#dedede;box-shadow:0 5px 22px #0003}
+.hero-cta:hover .action-circle svg {transform:rotate(0)}
+.hero-secondary {display:inline-flex;align-items:center;gap:13px;padding:8px 0;color:#efefef;border-bottom:1px solid #ffffff48;font-size:12px;transition:gap .25s,border-color .25s}
+.hero-secondary svg {width:13px;height:13px}
+.hero-secondary:hover {gap:19px;border-color:#fff}
+.hero-caption {display:flex;align-items:flex-end;flex-direction:column;gap:22px;min-width:150px;color:#d2d2d2;font-size:9px;letter-spacing:1.15px;text-align:right}
+.photo-credit {color:#c5c5c5;font-size:9px;line-height:1.7;letter-spacing:.4px;text-decoration:none;opacity:.8}
+.photo-credit:hover {color:#fff;opacity:1}
+.hero-scroll {display:inline-flex;align-items:center;gap:12px;color:#e4e4e4;font-size:10px;letter-spacing:.5px}
+.hero-scroll svg {width:13px;height:13px;transform:rotate(90deg)}
+.protocol-ribbon {display:flex;align-items:center;gap:30px;min-height:54px;margin:0 0 28px;overflow:hidden;border-bottom:1px solid #ffffff12;color:#999;mask-image:linear-gradient(90deg,transparent,#000 4%,#000 96%,transparent)}
+.protocol-track {display:flex;width:max-content;flex-shrink:0;gap:40px;will-change:transform}
+.protocol-group {display:flex;align-items:center;flex-shrink:0;gap:40px;font:10px/1 var(--mono);letter-spacing:1.7px;white-space:nowrap}
+.protocol-group i {font-size:15px;font-style:normal;color:#5c5c5c}
+.overview-section-label {display:flex;align-items:center;justify-content:space-between;gap:16px;margin:0 1px 13px;color:#808080;font-size:10px;letter-spacing:1.2px}
+.overview-section-label>span:last-child {font-family:var(--mono);font-size:9px;color:#626262}
+.panel {transition:border-color .25s,box-shadow .25s}
+.panel:hover {border-color:#ffffff28;box-shadow:inset 0 1px 0 #ffffff05,0 12px 38px #0002}
+
+/* Full-bleed photographic sign-in, with the form remaining a normal form. */
+.login-editorial {background:#080808}
+.login-editorial .auth-header {position:absolute;inset:0 0 auto;z-index:10;min-height:85px;padding:27px 40px;background:none}
+.login-editorial .auth-header .brand {color:#fff}
+.login-editorial .auth-header-label {color:#aaa;letter-spacing:1.5px;font-size:9px}
+.editorial-auth-shell {display:grid;grid-template-columns:1.1fr .9fr;align-items:stretch;width:100%;max-width:none;min-height:calc(100svh - 56px);margin:0;padding:0;flex:1}
+.auth-visual {position:relative;isolation:isolate;min-width:0;min-height:700px;overflow:hidden;background:#1c1c1c;border-right:1px solid #ffffff10}
+.auth-visual-media {z-index:-3}
+.auth-visual .cinematic-image {object-position:40% 50%;filter:grayscale(1) contrast(1.05)}
+.auth-visual-shade {position:absolute;inset:0;z-index:-2;background:linear-gradient(0deg,#000d 0%,#0002 65%,#0004)}
+.auth-visual-copy {position:absolute;z-index:2;left:48px;right:36px;bottom:125px}
+.visual-index {display:block;margin-bottom:25px;color:#d0d0d0;font:10px/1.5 var(--mono);letter-spacing:2px}
+.auth-visual-copy h2 {color:#fff;font-size:clamp(43px,4.4vw,70px);line-height:1.02;letter-spacing:-2.8px;font-weight:450}
+.auth-visual-copy h2 em {font-family:Georgia,"Times New Roman",serif;font-weight:400}
+.auth-visual-copy p {max-width:320px;margin-top:25px;color:#c4c4c4;font-size:12px;line-height:1.8}
+.auth-visual-caption {position:absolute;left:48px;right:36px;bottom:36px;z-index:3;display:flex;align-items:center;justify-content:space-between;gap:15px;padding-top:20px;border-top:1px solid #ffffff32;color:#c5c5c5;font-size:8px;letter-spacing:1.3px}
+.auth-visual-caption>span:last-child {font-size:24px;line-height:1;color:#fff}
+.login-editorial .auth-panel {align-self:center;width:min(370px,calc(100% - 80px));max-width:none;margin:0 auto;padding:115px 0 50px}
+.login-editorial .auth-panel-heading {margin-bottom:31px}
+.login-editorial .auth-panel-heading .eyebrow {margin-bottom:13px;color:#8e8e8e;font-size:9px;letter-spacing:1.5px}
+.login-editorial .auth-panel h1 {font-size:46px;line-height:1.04;letter-spacing:-2px;font-weight:450}
+.login-editorial .auth-panel-heading>p {margin-top:17px;font-size:12px;color:#898989}
+.login-editorial .auth-form .field-label {font-size:11px;color:#bdbdbd}
+.login-editorial .auth-form .form-input {min-height:45px;background:#101010;border-color:#ffffff1c;border-radius:6px}
+.login-editorial .login-submit {min-height:45px;border-radius:6px;background:#fff;color:#111;border-color:#fff;box-shadow:none;font-size:12px;transition:background .2s,box-shadow .2s}
+.login-editorial .login-submit:hover {background:#d8d8d8;box-shadow:0 4px 24px #ffffff0c}
+.login-editorial .login-submit>svg {transition:transform .25s}
+.login-editorial .login-submit:hover>svg {transform:translateX(4px)}
+.login-editorial .auth-access-note {margin-top:22px}
+.login-editorial .auth-access-note p {font-size:10px;color:#777}
+.login-editorial .auth-context {margin-top:22px;padding-top:17px;border-color:#ffffff12}
+.login-editorial .auth-context p,.login-editorial .auth-context strong {font-size:10px}
+.login-editorial .auth-context p>span {font-size:10px;color:#777}
+.login-editorial .auth-context-dot {background:#bdbdbd}
+.login-editorial .auth-footer {position:relative;z-index:4;min-height:56px;padding:18px 40px;background:#080808;border-color:#ffffff10;font-size:9px;color:#737373}
+
+/* Motion is an enhancement. Static content is the default. */
+.has-motion .hero-shutter {display:block;animation:shutter-open 1.25s cubic-bezier(.77,0,.18,1) both}
+.has-motion .hero-title-line>span {animation:title-rise 1.25s cubic-bezier(.16,1,.3,1) .2s both}
+.has-motion .hero-title-line:last-child>span {animation-delay:.36s}
+.has-motion .hero-meta,.has-motion .hero-bottom {animation:soft-arrival 1s ease .65s both}
+.has-motion .hero-image-wrap,.has-motion .auth-visual-media {animation:photo-drift 22s ease-in-out infinite alternate}
+.has-motion .protocol-track {animation:protocol-flow 34s linear infinite}
+.has-motion .hero-scroll svg {animation:scroll-nudge 2.8s ease-in-out infinite}
+.has-motion .auth-visual-copy {animation:soft-arrival 1.3s cubic-bezier(.16,1,.3,1) .2s both}
+.has-motion .login-editorial .auth-panel-heading {animation:soft-arrival 1s ease .35s both}
+.has-motion .reveal-pending {opacity:0;transform:translate3d(0,25px,0)}
+.has-motion .is-visible {opacity:1;transform:translate3d(0,0,0);transition:opacity .85s ease,transform .85s cubic-bezier(.16,1,.3,1)}
+.auth-pending .hero-shutter,.auth-pending .hero-title-line>span,.auth-pending .hero-meta,.auth-pending .hero-bottom,.auth-pending .hero-image-wrap {animation-play-state:paused}
+@keyframes shutter-open {from{transform:scaleY(1)}to{transform:scaleY(0)}}
+@keyframes title-rise {from{transform:translate3d(0,110%,0) rotate(2deg);opacity:0}to{transform:translate3d(0,0,0) rotate(0);opacity:1}}
+@keyframes soft-arrival {from{opacity:0;transform:translate3d(0,22px,0)}to{opacity:1;transform:translate3d(0,0,0)}}
+@keyframes photo-drift {from{transform:scale(1.025) translate3d(0,0,0)}to{transform:scale(1.075) translate3d(-.6%,-.4%,0)}}
+@keyframes protocol-flow {from{transform:translateX(0)}to{transform:translateX(calc(-50% - 20px))}}
+@keyframes scroll-nudge {0%,60%,100%{translate:0 0}30%{translate:0 5px}}
+@media(max-width:1100px) {
+  .cinematic-hero {min-height:445px;padding:30px 35px 32px}
+  .hero-title {font-size:76px;letter-spacing:-4px}
+  .hero-title-line:last-child>span {letter-spacing:-3.8px}
+  .auth-visual-copy,.auth-visual-caption {left:34px;right:28px}
+  .auth-visual-copy h2 {font-size:52px;letter-spacing:-2.4px}
+  .login-editorial .auth-panel {width:calc(100% - 60px)}
+  .login-editorial .auth-panel h1 {font-size:41px}
+}
+@media(max-width:780px) {
+  .cinematic-hero {min-height:450px;padding:27px 28px 30px}
+  .hero-title {font-size:72px}
+  .hero-meta>span:last-child {font-size:8px}
+  .hero-caption {min-width:120px}
+  .hero-caption .photo-credit {max-width:110px;font-size:8px}
+  .hero-summary {font-size:12px}
+  .hero-shade {background:linear-gradient(90deg,#0009,#0001),linear-gradient(0deg,#0009,#0000 75%)}
+  .editorial-auth-shell {grid-template-columns:1fr;min-height:0}
+  .login-editorial .auth-header {padding:24px 28px;min-height:80px}
+  .auth-visual {min-height:340px;height:340px;border-right:0;border-bottom:1px solid #ffffff15}
+  .auth-visual .cinematic-image {object-position:55% 45%}
+  .auth-visual-copy {left:30px;right:30px;bottom:60px}
+  .visual-index {margin-bottom:13px;font-size:9px}
+  .auth-visual-copy h2 {font-size:44px;letter-spacing:-1.7px}
+  .auth-visual-copy p {display:none}
+  .auth-visual-caption {left:30px;right:30px;bottom:20px;border-top:0;padding-top:0;font-size:7px}
+  .auth-visual-caption>span:last-child {font-size:20px}
+  .login-editorial .auth-panel {width:min(400px,calc(100% - 60px));padding:45px 0 46px}
+  .login-editorial .auth-panel h1 {font-size:40px}
+  .login-editorial .auth-panel-heading {margin-bottom:27px}
+  .login-editorial .auth-panel h1 br {display:none}
+  .login-editorial .auth-footer {padding-inline:28px}
+}
+@media(max-width:480px) {
+  .cinematic-hero {min-height:495px;padding:23px 22px 25px}
+  .hero-meta {font-size:8px;letter-spacing:1.1px}
+  .hero-meta>span:last-child {display:none}
+  .hero-content {padding:26px 0 15px}
+  .hero-title {font-size:66px;letter-spacing:-3.8px}
+  .hero-title-line:last-child>span {letter-spacing:-3.3px}
+  .hero-bottom {display:block}
+  .hero-summary {max-width:245px;margin-bottom:19px;font-size:12px}
+  .hero-actions {gap:19px}
+  .hero-cta {min-height:43px;gap:17px;padding-left:16px;font-size:11px}
+  .action-circle {width:27px;height:27px}
+  .hero-secondary {font-size:11px;gap:10px}
+  .hero-caption {flex-direction:row;align-items:center;justify-content:space-between;gap:15px;margin-top:27px;text-align:left}
+  .hero-caption .photo-credit {max-width:130px;font-size:7px;text-align:right;line-height:1.5}
+  .hero-scroll {font-size:9px;gap:8px}
+  .hero-scroll svg {width:11px;height:11px}
+  .protocol-ribbon {min-height:47px;margin-bottom:23px}
+  .protocol-group {font-size:9px;letter-spacing:1.1px}
+  .overview-section-label {font-size:9px;letter-spacing:.9px;margin-bottom:12px}
+  .overview-section-label>span:last-child {font-size:8px}
+  .login-editorial .auth-header {padding:23px 24px}
+  .login-editorial .auth-header-label {font-size:7px;letter-spacing:1px;color:#bbb}
+  .auth-visual {height:315px;min-height:315px}
+  .auth-visual-copy,.auth-visual-caption {left:26px;right:26px}
+  .auth-visual-copy h2 {font-size:41px;letter-spacing:-1.6px}
+  .login-editorial .auth-panel {width:calc(100% - 52px);padding-top:36px}
+  .login-editorial .auth-panel h1 {font-size:35px;letter-spacing:-1.5px}
+  .login-editorial .auth-form .form-input {font-size:16px;min-height:46px}
+  .login-editorial .auth-panel-heading>p {font-size:12px}
+  .login-editorial .auth-footer {padding-inline:24px;font-size:8px}
+}
+@media(max-width:360px) {
+  body {min-width:0}
+  .cinematic-hero {min-height:470px;padding-inline:18px}
+  .hero-title {font-size:58px;letter-spacing:-3px}
+  .hero-title-line:last-child>span {letter-spacing:-2.8px}
+  .hero-cta {gap:12px;padding-left:13px}
+  .hero-actions {gap:15px}
+  .hero-caption .photo-credit {max-width:110px}
+  .login-editorial .auth-panel h1 {font-size:31px}
+}
+@media(prefers-reduced-motion:reduce) {
+  .cinematic-image {transform:scale(1.025);transition:none;will-change:auto}
+  .hero-image-wrap,.auth-visual-media {transform:scale(1);animation:none!important}
+  .hero-shutter {display:none!important}
+  .protocol-track {transform:none;animation:none!important;will-change:auto}
+  .hero-title-line>span,.hero-meta,.hero-bottom,.auth-visual-copy,.login-editorial .auth-panel-heading {opacity:1!important;transform:none!important;animation:none!important}
+  .reveal-pending,.is-visible {opacity:1!important;transform:none!important;transition:none!important}
+  .hero-scroll svg {animation:none!important}
+}

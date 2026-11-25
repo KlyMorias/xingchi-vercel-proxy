@@ -43,7 +43,9 @@ test("account bootstrap authenticates and returns usage from exactly one storage
   const body = JSON.parse(res.body);
   assert.equal(body.user.username, "Member");
   assert.equal(body.key.prefix, "kly_prefix12");
-  assert.equal(body.limits.hourly_requests, 20);
+  assert.equal(body.limits.daily_tokens, 1_000_000_000);
+  assert.equal(body.user.daily_tokens, 1_000_000_000);
+  assert.equal(body.usage.remaining_tokens_today, 1_000_000_000);
   assert.equal(body.usage.used_today, 7);
   assert.equal(body.usage.used_this_week, 24);
   assert.equal(body.service.model, "gpt-6.1-sol");

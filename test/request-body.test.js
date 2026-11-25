@@ -38,7 +38,7 @@ test("gzip, deflate, brotli and zstd decode bounded large JSON including mixed-c
   }
 });
 
-test("compressed requests may expand beyond ingress but never beyond the 16 MB decode cap", async () => {
+test("compressed requests may expand beyond ingress but never beyond the 64 MiB decode cap", async () => {
   const body = Buffer.from(JSON.stringify({ input: "x".repeat(MAX_DECODED_BYTES - 12) }));
   assert.equal(body.length, MAX_DECODED_BYTES);
   const compressed = zstdCompressSync(body);
@@ -48,6 +48,20 @@ test("compressed requests may expand beyond ingress but never beyond the 16 MB d
   // arbitrarily sized result and checking only after decompression finishes.
   await assert.rejects(readJsonBody(request(gzipSync(Buffer.concat([body, Buffer.from(" ")])),
     { "content-encoding": "gzip" })), { statusCode: 413 });
+});
+
+test("explicit standalone limits accept a 50 MiB HTTP body without changing Vercel defaults", async () => {
+  const size = 50 * 1024 * 1024;
+  const body = Buffer.from(JSON.stringify({ input: "x".repeat(size - 12) }));
+  assert.equal(body.length, size);
+  await assert.rejects(readJsonBody(request(body, { "content-length": String(size) })), { statusCode: 413 });
+  const parsed = await readJsonBody(request(body, { "content-length": String(size) }),
+    { maxWireBytes: MAX_DECODED_BYTES, maxDecodedBytes: MAX_DECODED_BYTES });
+  assert.equal(parsed.input.length, size - 12);
+  for (const value of [0, -1, 1.5, Infinity, "1000"]) {
+    await assert.rejects(readJsonBody(request(Buffer.from("{}")), { maxWireBytes: value }), { statusCode: 500 });
+    await assert.rejects(readJsonBody(request(Buffer.from("{}")), { maxDecodedBytes: value }), { statusCode: 500 });
+  }
 });
 
 test("invalid compressed streams, invalid JSON and invalid UTF-8 return safe 400 responses", async () => {

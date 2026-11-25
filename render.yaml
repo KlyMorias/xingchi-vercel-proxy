@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: klyapi-large-request-gateway
+    runtime: node
+    plan: free
+    buildCommand: npm ci --omit=dev --ignore-scripts
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeployTrigger: "off"
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "24"
+      - key: GATEWAY_MAX_CONCURRENT_REQUESTS
+        value: "1"
+      - key: GATEWAY_UPLOAD_TIMEOUT_MS
+        value: "120000"
+      - key: BLOB_READ_WRITE_TOKEN
+        sync: false
+      - key: XINGCHI_SOL_API_KEY
+        sync: false
+      - key: XINGCHI_ASTRA_API_KEY
+        sync: false
+      - key: UPSTREAM_AUTH_MODE
+        value: authorization

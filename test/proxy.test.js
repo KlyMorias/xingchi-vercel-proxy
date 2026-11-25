@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 const { gzipSync, zstdCompressSync } = require("node:zlib");
+const { MAX_DECODED_BYTES } = require("../lib/request-body");
 
 const proxyModule = require("../api/proxy.js");
 const handler = proxyModule.createHandler({ isConfigured: () => true,
@@ -197,7 +198,7 @@ test("invalid or unsupported compressed bodies fail before reserving quota or co
     reserve: async () => { reservations++; return { ok: true, reservation: null }; }, release: async () => {} });
   global.fetch = async () => { calls++; throw new Error("Must not reach provider"); };
   for (const [encoding, body, status] of [["gzip", Buffer.from("broken"), 400], ["gzip, br", Buffer.from("{}"), 415],
-    ["gzip", gzipSync(Buffer.alloc(16_000_001, 120)), 413]]) {
+    ["gzip", gzipSync(Buffer.alloc(MAX_DECODED_BYTES + 1, 120)), 413]]) {
     const res = makeResponse();
     await localHandler(makeRequest({ headers: { authorization: "Bearer kly_" + "a".repeat(43),
       "content-type": "application/json", "content-encoding": encoding }, body }), res);
@@ -635,6 +636,10 @@ test("accepts a personal key and reserves its generation quota before forwarding
       sequence.push("reserve");
       return { ok: true, reservation: { id: "reservation-1" } };
     },
+    settle: async (_reservation, usage) => {
+      assert.deepEqual(usage, { input_tokens: 3, output_tokens: 2, total_tokens: 5 });
+      sequence.push("settle");
+    },
     release: async () => { throw new Error("Successful calls must keep their quota"); },
   });
   global.fetch = async () => {
@@ -646,7 +651,7 @@ test("accepts a personal key and reserves its generation quota before forwarding
     authorization: `Bearer ${token}`, "content-type": "application/json",
   }, body: '{"model":"gpt-6.1-sol","input":"hello"}' }), res);
   assert.equal(res.statusCode, 200);
-  assert.deepEqual(sequence, ["reserve", "upstream"]);
+  assert.deepEqual(sequence, ["reserve", "upstream", "settle"]);
 });
 
 test("stops an exhausted personal key without spending upstream quota", async () => {

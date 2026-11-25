@@ -87,13 +87,6 @@ return async function handler(req, res) {
     if (req.method === "POST") {
       const created = await keyStore.createKey(user.id);
       sendJson(res, 201, { ...created,
-        limits: { hourly_limit: created.key.hourly_limit, daily_limit: created.key.daily_limit,
-          weekly_limit: created.key.weekly_limit, hourly_requests: created.key.hourly_limit,
-          daily_requests: created.key.daily_limit, weekly_requests: created.key.weekly_limit,
-          requests_per_minute: created.key.requests_per_minute },
-        usage: { used_this_hour: created.key.used_this_hour, remaining_this_hour: created.key.remaining_this_hour,
-          used_today: created.key.used_today, remaining_today: created.key.remaining_today,
-          used_this_week: created.key.used_this_week, remaining_this_week: created.key.remaining_this_week },
         service: keyStore.serviceInfo });
     } else if (req.method === "DELETE") {
       await keyStore.revokeKey(user.id);

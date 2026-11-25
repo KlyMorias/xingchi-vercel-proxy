@@ -8,13 +8,15 @@ Vercel'de çalışan, yalnızca yöneticinin eklediği hesaplara açık API pane
 - `/key`: kişisel API anahtarı oluşturma, kopyalama, yenileme ve iptal.
 - Panelde **Modeller**: aktif model kataloğunu ve desteklenen API yollarını gör.
 - Panelde **Deneme alanı**: kişisel anahtarınla gerçek model yanıtını akış halinde izle; ilk metin, toplam süre ve çıktı token sayısını gör. Anahtar tarayıcıya kaydedilmez. Deneme modülü yalnızca bu sekme açıldığında yüklenir.
-- Panelde **Kullanıcılar**: yönetici kullanıcı ekler, hesabı kapatır, parola sıfırlar ve dakika/saat/gün/hafta kotalarını ayarlar.
+- Panelde **Kullanıcılar**: yönetici kullanıcı ekler, hesabı kapatır, parola sıfırlar ve dakikalık kötüye kullanım hız sınırını ayarlar. Her hesabın ücretsiz günlük kotası 1 milyar tokendır.
 - Panelde **Şifre değiştir**: mevcut kullanıcı kendi parolasını değiştirir.
 - OpenAI Base URL: `https://klyapi.vercel.app/api/v1`
 - Anthropic Base URL: `https://klyapi.vercel.app/api`
 - Modeller: `gpt-6.1-sol` ve `gpt-6-astra`; yalnızca sunucuda anahtarı tanımlanmış modeller katalogda yer alır.
 
-Bir hesapta bir aktif API anahtarı bulunur; anahtar 30 gün geçerlidir ve tam değeri yalnızca oluşturma yanıtında gösterilir. Varsayılan kota dakikada 5, saatte 20, günde 50 ve haftada 200 üretim isteğidir. Yönetici bunları kullanıcı bazında değiştirebilir. Yenileme kullanım sayaçlarını sıfırlamaz. Model listesi dakika hız sınırına tabidir, ancak saatlik/günlük/haftalık üretim kotalarını tüketmez; başarısız upstream çağrılarında üretim kotası iade edilir. Saatlik ve günlük sayaçlar UTC sınırında, haftalık sayaç pazartesi UTC 00:00'da yenilenir. Kapatılmış kullanıcıların oturumları ve API anahtarları erişemez. Eski ortak sahip tokenı artık kabul edilmez.
+Bir hesapta bir aktif API anahtarı bulunur; anahtar 30 gün geçerlidir ve tam değeri yalnızca oluşturma yanıtında gösterilir. Mevcut ve yeni tüm hesaplara her UTC günü ücretsiz **1.000.000.000 token** verilir. Kullanım, sağlayıcının bildirdiği giriş ve çıkış tokenlarının toplamıdır; önbellek girişleri ve düşünme çıktıları bu toplamların alt kümesi olduğundan ayrıca eklenmez. Para cinsinden ücret veya ödeme sistemi yoktur. Önceki saatlik/günlük/haftalık istek kotaları artık uygulanmaz. Dakikalık kötüye kullanım hız sınırı varsayılan 5 istektir ve yönetici tarafından hesap bazında değiştirilebilir.
+
+Üretim çağrısı başlamadan önce tahmini token bütçesi atomik olarak ayrılır; doğrulanmış terminal yanıttaki gerçek kullanım bu rezervasyonu tek seferde kapatır. Eşzamanlı çağrılar ayrılmış bütçeyi harcayamaz. Başarısız çağrıda rezervasyon iade edilir; yarım kalmış rezervasyonlar 10 dakika sonra kullanılabilir bakiyeyi tutmaz. Gerçek kullanım tahmini aşarsa gerçek sayı kaydedilir ve kalan bakiye sıfırda sınırlandırılır. Giriş/çıkış token sayıları, toplam tüketim, bekleyen rezervasyon ve kalan token panelde gösterilir. Günlük tokenlar UTC 00:00'da yenilenir; gece yarısını aşan çağrı başladığı güne aittir. Model listesi dakika hız sınırına tabidir, token tüketmez. Anahtar yenilemek kullanımı sıfırlamaz. Kapatılmış kullanıcıların oturumları ve API anahtarları erişemez. Eski ortak sahip tokenı artık kabul edilmez.
 
 ## Codex masaüstü ve CLI
 
@@ -81,7 +83,11 @@ Doğrulanmış `response.completed` veya `response.incomplete` olayı geldiğind
 
 ## Büyük istekler ve 413
 
-Eski 1 MB uygulama sınırı kaldırıldı. Sıkıştırılmamış veya sıkıştırılmış HTTP gövdesi en çok 4.400.000 bayt olabilir; zstd, gzip, deflate ve Brotli açıldıktan sonra JSON gövdesi en çok 16.000.000 bayttır. Sınırlar byte cinsindendir. Bozuk sıkıştırma 400, bilinmeyen veya üst üste kodlama 415, boyut aşımı 413 döndürür; kota ayrılmadan reddedilir. Varsayılan Vercel Functions gövde sınırı hâlâ geçerlidir. 4,4 MB üstü sıkıştırılmamış Codex geçmişinde yeni sohbet veya özetleme gerekir. Daha önceki örneği kullananlar güncel yapılandırmadan otomatik özetleme satırını ekleyebilir.
+Vercel Functions girişinde uygulamanın aktarım sınırı 4.400.000 bayttır; zstd, gzip, deflate ve Brotli açıldıktan sonra JSON sınırı 64 MiB'dir. Vercel isteği işleve ulaşmadan reddedebilir: yalnızca uygulamadaki sayıyı büyütmek `FUNCTION_PAYLOAD_TOO_LARGE` hatasını çözmez. Vercel'in yeni 20 MiB isteğe bağlı sınırı da 50 MB hedefinin altındadır. Bozuk sıkıştırma 400, bilinmeyen veya üst üste kodlama 415, boyut aşımı 413 döndürür; kota ayrılmadan reddedilir.
+
+`npm start` ile çalışan ayrı Node.js 24 geçidi, **toplam HTTP/JSON gövdesinde 50 MiB (52.428.800 bayt)** kabul eder; base64 görseller ve JSON alanları bu toplama dahildir. Sıkıştırılmış gövde de, açılmış JSON da bu sınırı geçemez. Aynı kişisel anahtarları ve özel Blob hesap deposunu kullanır; gerçek token hesabı ve Responses / Chat Completions / Messages akışları korunur. Varsayılan tek eşzamanlı POST, okuma öncesi anahtar doğrulaması, bellek toplama ve JSON karmaşıklık sınırları küçük sunucuda bellek kullanımını sınırlar.
+
+Depoda açıkça `plan: free` seçen Render Blueprint'i (`render.yaml`) ve Docker dosyaları hazırdır. Harici hizmet kurulup gerçek 50 MiB giriş testi geçmeden mevcut Vercel yolları değiştirilmemelidir. Hazırlanan geçit yerel gerçek HTTP testlerinden geçmiştir; **bu, harici sunucunun kurulmuş veya mevcut canlı adresin 50 MiB'a geçmiş olduğu anlamına gelmez**. Ücretsiz planda uyku, soğuk başlangıç ve aylık kullanım kotaları vardır. Kurulum, sınır testi ve Vercel'e güvenli yönlendirme: [Büyük istek geçidi](docs/large-requests.md).
 
 ## Doğrulama
 

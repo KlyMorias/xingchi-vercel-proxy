@@ -85,6 +85,7 @@ test("login creates a hashed opaque secure session and returns no private fields
   const result = JSON.parse(res.body);
   assert.equal(result.user.username, "KlyMorias");
   assert.equal(result.user.role, "admin");
+  assert.equal(result.user.daily_tokens, 1_000_000_000);
   assert.equal(result.user.password_hash, undefined);
   assert.equal(result.user.session_version, undefined);
   assert.equal(result.user.id, undefined);
@@ -266,6 +267,7 @@ test("admin-created accounts have private hashes and configurable bounded limits
   assert.equal(JSON.parse(res.body).user.daily_limit, 120);
   assert.equal(JSON.parse(res.body).user.hourly_limit, 30);
   assert.equal(JSON.parse(res.body).user.weekly_limit, 480);
+  assert.equal(JSON.parse(res.body).user.daily_tokens, 1_000_000_000);
   const stored = fixture.store.snapshot().users.guest_1;
   assert.notEqual(stored.password_hash, "guest-password");
   assert.equal(await verifyPassword("guest-password", stored.password_hash), true);

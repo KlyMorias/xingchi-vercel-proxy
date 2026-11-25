@@ -5,6 +5,7 @@ const { collectResponse, streamResponse } = require("../lib/responses-transport"
 const { startKeepalive } = require("../lib/client-keepalive");
 const { DEFAULT_MODEL, resolveModel, availableModels, modelCatalog } = require("../lib/models");
 const { readJsonBody } = require("../lib/request-body");
+const { estimatedTokens, actualTokens } = require("../lib/token-usage");
 
 const UPSTREAM_ORIGIN = "https://api.xingchiapi.com";
 const ALLOWED_ROUTES = new Set([
@@ -69,7 +70,7 @@ function enforceOutputLimit(payload, path) {
     }
   }
 
-  return JSON.stringify(bounded);
+  return bounded;
 }
 
 function upstreamHeaders(req, apiKey, authMode) {
@@ -121,7 +122,7 @@ async function writeUpstreamResponse(upstream, res) {
   }
 }
 
-function createHandler(store = keyStore, { keepaliveIntervalMs = 8000 } = {}) {
+function createHandler(store = keyStore, { keepaliveIntervalMs = 8000, bodyLimits } = {}) {
 return async function handler(req, res) {
   const timings = [];
   const timing = (name, start) => {
@@ -167,6 +168,7 @@ return async function handler(req, res) {
   }
 
   let body;
+  let tokenBudget;
   let clientPayload;
   let clientStream = false;
   let selectedModel;
@@ -178,7 +180,10 @@ return async function handler(req, res) {
       return;
     }
     try {
-      const payload = await readJsonBody(req);
+      const payload = await readJsonBody(req, bodyLimits);
+      // The memory-bounded standalone gateway can collect the now-unreachable
+      // decoded buffers before serializing another large upstream request.
+      if (typeof bodyLimits?.afterRead === "function") bodyLimits.afterRead(req);
       selectedModel = resolveModel(payload.model === undefined ? DEFAULT_MODEL : payload.model);
       if (!selectedModel) {
         sendJson(res, 400, "Requested model is not available");
@@ -197,7 +202,7 @@ return async function handler(req, res) {
         return;
       }
       clientStream = payload.stream === true;
-      clientPayload = JSON.parse(enforceOutputLimit({ ...payload, model: selectedModel.id }, path));
+      clientPayload = enforceOutputLimit({ ...payload, model: selectedModel.id }, path);
       let upstreamPayload;
       if (format === "chat") upstreamPayload = chatRequestToResponses(clientPayload);
       else if (format === "messages") upstreamPayload = messagesRequestToResponses(clientPayload);
@@ -212,6 +217,7 @@ return async function handler(req, res) {
         }
       }
       body = JSON.stringify({ ...upstreamPayload, instructions: upstreamPayload.instructions || "You are a helpful assistant.", stream: true, store: false });
+      tokenBudget = estimatedTokens(body, upstreamPayload.max_output_tokens);
     } catch (error) {
       sendJson(res, error.statusCode || 400, error.message);
       return;
@@ -223,7 +229,7 @@ return async function handler(req, res) {
   {
     try {
       const ip = String(req.headers["x-vercel-forwarded-for"] || req.socket?.remoteAddress || "unknown").split(",")[0].trim();
-      const access = await store.reserve(personalToken, { ip, consumeDaily: req.method === "POST" });
+      const access = await store.reserve(personalToken, { ip, consumeDaily: req.method === "POST", estimatedTokens: tokenBudget });
       timing("quota", quotaStart);
       if (!access.ok) {
         if (access.retryAfter) res.setHeader("retry-after", String(access.retryAfter));
@@ -240,6 +246,16 @@ return async function handler(req, res) {
     }
   }
 
+  // The client can leave while the persistent quota reservation is pending.
+  // Do not start a provider request after that disconnect went unobserved.
+  if (req.aborted || res.destroyed) {
+    if (reservation) {
+      try { await store.release(reservation); }
+      catch { diagnostics("refund", { reason: "storage_unavailable" }); }
+    }
+    return;
+  }
+
   if (req.method === "GET") {
     res.statusCode = 200;
     res.setHeader("content-type", "application/json; charset=utf-8");
@@ -249,8 +265,25 @@ return async function handler(req, res) {
   }
 
   let quotaSettled = false;
-  const refund = async () => {
+  let terminalReceived = false;
+  const settle = async (response) => {
+    terminalReceived = true;
     if (!reservation || quotaSettled) return;
+    const previousPhase = phase;
+    phase = "settlement";
+    const usage = actualTokens(response);
+    try {
+      await store.settle(reservation, usage);
+    } catch {
+      // Settlement is atomic and idempotent by reservation ID, so this retry
+      // cannot double-charge even when the previous write acknowledgement was lost.
+      await store.settle(reservation, usage);
+    }
+    quotaSettled = true;
+    phase = previousPhase;
+  };
+  const refund = async () => {
+    if (!reservation || quotaSettled || terminalReceived) return;
     await store.release(reservation);
     quotaSettled = true;
   };
@@ -292,10 +325,11 @@ return async function handler(req, res) {
       phase = "stream";
       const adapter = format === "chat" ? createChatStream(selectedModel.id, { includeUsage: clientPayload.stream_options?.include_usage === true })
         : format === "messages" ? createMessagesStream(selectedModel.id) : null;
-      await streamResponse(upstream, res, format, adapter);
+      await streamResponse(upstream, res, format, adapter, { onComplete: settle });
     } else {
       phase = "collect";
       const response = await collectResponse(upstream);
+      await settle(response);
       keepalive?.stop();
       const result = format === "chat" ? chatCompletionFromResponse(response, selectedModel.id)
         : format === "messages" ? messageFromResponse(response, selectedModel.id) : response;
@@ -311,11 +345,14 @@ return async function handler(req, res) {
     diagnostics(phase, { reason: controller.signal.aborted ? "aborted" : ["invalid_event", "incomplete_stream", "upstream_generation_failed"].includes(error.code) ? error.code : "upstream_request_failed" });
     try { await refund(); } catch { diagnostics("refund", { reason: "storage_unavailable" }); }
     if (!res.destroyed && !res.headersSent) {
-      res.setHeader("x-klyapi-error-source", "upstream_transport");
-      sendJson(res, 502, "Upstream request failed");
+      res.setHeader("x-klyapi-error-source", phase === "settlement" ? "quota_storage" : "upstream_transport");
+      sendJson(res, phase === "settlement" ? 503 : 502,
+        phase === "settlement" ? "Token accounting is temporarily unavailable" : "Upstream request failed");
     }
     else if (!res.destroyed) {
-      const failure = { error: { type: "api_error", message: "Upstream generation failed", code: "upstream_generation_failed" } };
+      const failure = { error: { type: "api_error",
+        message: phase === "settlement" ? "Token accounting is temporarily unavailable" : "Upstream generation failed",
+        code: phase === "settlement" ? "token_accounting_unavailable" : "upstream_generation_failed" } };
       res.end(!clientStream ? JSON.stringify(failure) : format === "messages" ? `event: error\ndata: ${JSON.stringify({ type: "error", ...failure })}\n\n` : `data: ${JSON.stringify(failure)}\n\n`);
     }
   } finally {

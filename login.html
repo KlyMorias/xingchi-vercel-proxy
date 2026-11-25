@@ -3,17 +3,59 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#0d1214">
+    <meta name="theme-color" content="#0b0b0b">
     <title>Giriş yap · KlyAPI</title>
-    <meta name="description" content="KlyAPI hesabına giriş yap ve API erişimini yönet.">
-    <link rel="stylesheet" href="/assets/console.css?v=24ffb208d0">
+    <meta name="description" content="KlyAPI konsoluna giriş yap. API anahtarlarını ve günlük token kullanımını yönet.">
+    <link rel="stylesheet" href="/assets/console.css?v=8c063263ed">
+    <link rel="stylesheet" href="/assets/editorial.css?v=a72f37f07d">
     <script src="/assets/login.js?v=c69239b8f0" defer></script>
+    <script src="/assets/motion.js?v=bf3af0f586" defer></script>
   </head>
-  <body class="login-page">
-    <header class="login-header"><a class="brand" href="/login"><span class="brand-mark">K<span>↗</span></span><span>Kly<span class="brand-light">API</span><span class="brand-dot">.</span></span></a><span class="private-badge"><span></span>Özel çalışma alanı</span></header>
-    <main class="login-layout">
-      <section class="login-story" aria-labelledby="story-title"><span class="eyebrow"><span class="eyebrow-line"></span>GELİŞTİRİCİ ÇALIŞMA ALANIN</span><h1 id="story-title">Bir anahtar.<br>Bir sonraki fikrin<span>.</span></h1><p>API erişimini tek yerden yönet.<br>Modelini dene, uygulamana bağlan, geliştirmeye başla.</p><div class="login-benefits"><div><span>01</span><p><strong>Erişimin senin elinde</strong><small>Kişisel anahtarını oluştur, yönet ve yenile.</small></p></div><div><span>02</span><p><strong>Her isteği takip et</strong><small>Saatlik, günlük ve haftalık kullanımını gör.</small></p></div><div><span>03</span><p><strong>Fikrini hayata geçir</strong><small>Canlı deneme alanı ve hazır Codex ayarlarıyla başla.</small></p></div></div></section>
-      <section class="login-form-section" aria-labelledby="login-title"><div class="login-form-wrap"><div class="login-form-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2"/></svg></div><h2 id="login-title">Tekrar hoş geldin.</h2><p class="login-description">Devam etmek için hesabına giriş yap.</p><form id="login-form"><div class="form-message" id="login-message" role="alert" hidden></div><label class="field-label" for="login-username">Kullanıcı adı</label><input class="form-input" id="login-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required maxlength="32" placeholder="Kullanıcı adın"><label class="field-label" for="login-password">Şifre</label><div class="password-input"><input class="form-input" id="login-password" name="password" type="password" autocomplete="current-password" required maxlength="128" placeholder="Şifreni gir"><button type="button" id="toggle-password" aria-label="Şifreyi göster" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></button></div><button class="button primary login-submit" id="login-submit" type="submit"><span>Giriş yap</span><span aria-hidden="true">↗</span></button></form><div class="invite-note"><span class="invite-line"></span><p>Hesaplar yalnızca yönetici tarafından oluşturulur.<br>Erişim için yöneticinle iletişime geç.</p></div></div></section>
-    </main><footer class="login-footer"><span>© KlyAPI</span><span>Senin hesabın. Senin erişimin.</span></footer><noscript><div class="noscript-warning">Giriş yapmak için JavaScript’i etkinleştir.</div></noscript>
+  <body class="login-page login-v2 login-editorial">
+    <header class="auth-header">
+      <a class="brand" href="/login" aria-label="KlyAPI konsolu"><span class="brand-mark" aria-hidden="true">K</span><span>KlyAPI</span></a>
+      <span class="auth-header-label">DEVELOPER PLATFORM</span>
+    </header>
+
+    <main class="auth-shell editorial-auth-shell">
+      <section class="auth-visual" aria-labelledby="auth-visual-title">
+        <div class="auth-visual-media" aria-hidden="true"><img class="cinematic-image" src="/assets/architecture-hero.webp" alt="" width="1800" height="1125" srcset="/assets/architecture-hero-small.webp 900w, /assets/architecture-hero.webp 1800w" sizes="(max-width: 780px) 100vw, 55vw" fetchpriority="high" decoding="async"></div>
+        <div class="auth-visual-shade" aria-hidden="true"></div>
+        <div class="auth-visual-copy" data-reveal>
+          <span class="visual-index">KLYAPI / 01</span>
+          <h2 id="auth-visual-title">Yalnızca bir<br><em>fikirle başlar.</em></h2>
+          <p>Fikrini modele, modeli uygulamana bağla.</p>
+        </div>
+        <div class="auth-visual-caption"><span>MODELLER · ANAHTARLAR · KULLANIM</span><a class="photo-credit" href="https://unsplash.com/photos/a-black-and-white-photo-of-a-curved-concrete-structure-ulFAi1jkNcA" target="_blank" rel="noopener noreferrer">Jonny James / Unsplash</a><span aria-hidden="true">↗</span></div>
+      </section>
+
+      <section class="auth-panel" aria-labelledby="login-title">
+        <div class="auth-panel-heading" data-reveal>
+          <span class="eyebrow">KONSOLA GİRİŞ</span>
+            <h1 id="login-title">Üretmeye <br>devam et.</h1>
+          <p>Çalışma alanın seni bekliyor.</p>
+        </div>
+
+        <form id="login-form" class="auth-form">
+          <div class="form-message" id="login-message" role="alert" hidden></div>
+          <label class="field-label" for="login-username">Kullanıcı adı</label>
+          <input class="form-input" id="login-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required maxlength="32" placeholder="Kullanıcı adını gir">
+
+          <label class="field-label" for="login-password">Şifre</label>
+          <div class="password-input">
+            <input class="form-input" id="login-password" name="password" type="password" autocomplete="current-password" required maxlength="128" placeholder="Şifreni gir">
+            <button type="button" id="toggle-password" aria-label="Şifreyi göster" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></button>
+          </div>
+
+          <button class="button primary login-submit" id="login-submit" type="submit"><span>Giriş yap</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></button>
+        </form>
+
+        <div class="auth-access-note"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><p>Hesaplar yönetici tarafından oluşturulur.<br>Erişim için yöneticinle iletişime geç.</p></div>
+        <div class="auth-context"><span class="auth-context-dot" aria-hidden="true"></span><p>Her hesapta <strong>1 milyar token / gün.</strong><span>Ücretsiz. Her gün 00:00 UTC’de yenilenir.</span></p></div>
+      </section>
+    </main>
+
+    <footer class="auth-footer"><span>© KlyAPI</span><span>Bir sonraki fikrine bağlan.</span></footer>
+    <noscript><div class="noscript-warning">Giriş yapmak için JavaScript’i etkinleştir.</div></noscript>
   </body>
 </html>

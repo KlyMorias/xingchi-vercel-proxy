@@ -1,0 +1,9 @@
+Photography: Jonny James
+Title: A black and white photo of a curved concrete structure
+Location: Tate Modern, London
+Source: https://unsplash.com/photos/a-black-and-white-photo-of-a-curved-concrete-structure-ulFAi1jkNcA
+Source image: https://images.unsplash.com/photo-1565768502473-c5dc73b7eb33
+License: Unsplash License, https://unsplash.com/license
+Downloaded: 2026-11-25
+Used as a self-hosted photographic background within the KlyAPI website.
+Responsive crops and WebP optimization are delivered by Unsplash's image CDN.

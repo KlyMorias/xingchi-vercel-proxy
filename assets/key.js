@@ -2,7 +2,7 @@
   "use strict";
 
   const byId = (id) => document.getElementById(id);
-  const state = { user: null, users: [], key: null, secret: null, revealed: false, busy: false, daily: 50, hourly: 20, weekly: 200, minute: 5, model: "gpt-6.1-sol", loaded: false, userMode: "create", view: "overview", usersLoadedAt: 0, lastRefreshAt: 0, lastRefreshAttempt: 0, stale: false, clockOffset: 0, resets: {}, remaining: {} };
+  const state = { user: null, users: [], key: null, secret: null, revealed: false, busy: false, daily: 1000000000, minute: 5, model: "gpt-6.1-sol", loaded: false, userMode: "create", view: "overview", usersLoadedAt: 0, lastRefreshAt: 0, lastRefreshAttempt: 0, stale: false, clockOffset: 0, resets: {}, remaining: {} };
   let toastTimeout;
   let refreshPromise;
   let usersPromise;
@@ -97,6 +97,7 @@
   function updateExample() {
     const key = state.secret && state.revealed ? state.secret : "YOUR_KEY";
     byId("code-example").textContent = exampleFor(key);
+    if (byId("overview-code")) byId("overview-code").textContent = exampleFor(key);
     if (byId("codex-config")) byId("codex-config").textContent = window.KlyCodexConfig.buildConfig(
       state.secret && state.revealed ? state.secret : undefined, state.model);
   }
@@ -215,44 +216,36 @@
       || !state.secret.startsWith(data.key.prefix));
     if (!data.key || keyChanged || secretMismatch) clearSensitiveKey();
     state.key = data.key || null;
-    state.daily = safeNumber(data.limits?.daily_requests ?? data.key?.daily_limit, 50);
-    state.hourly = safeNumber(data.limits?.hourly_requests ?? data.key?.hourly_limit, 20);
-    state.weekly = safeNumber(data.limits?.weekly_requests ?? data.key?.weekly_limit, 200);
+    state.daily = safeNumber(data.limits?.daily_tokens, 1000000000);
     state.minute = safeNumber(data.limits?.requests_per_minute, 5);
     renderModels(data.service);
     state.loaded = true;
-    const usage = safeNumber(state.key?.used_today ?? data.usage?.used_today, 0);
-    const remaining = safeNumber(state.key?.remaining_today ?? data.usage?.remaining_today, Math.max(0, state.daily - usage));
-    const hourlyUsage = safeNumber(data.usage?.used_this_hour ?? state.key?.used_this_hour, 0);
-    const hourlyRemaining = safeNumber(data.usage?.remaining_this_hour ?? state.key?.remaining_this_hour, Math.max(0, state.hourly - hourlyUsage));
-    const weeklyUsage = safeNumber(data.usage?.used_this_week ?? state.key?.used_this_week, 0);
-    const weeklyRemaining = safeNumber(data.usage?.remaining_this_week ?? state.key?.remaining_this_week, Math.max(0, state.weekly - weeklyUsage));
+    const input = safeNumber(data.usage?.input_tokens_today, 0);
+    const output = safeNumber(data.usage?.output_tokens_today, 0);
+    const usage = safeNumber(data.usage?.total_tokens_today, input + output);
+    const reserved = safeNumber(data.usage?.reserved_tokens_today, 0);
+    const remaining = safeNumber(data.usage?.remaining_tokens_today, Math.max(0, state.daily - usage - reserved));
     const serverTime = Date.parse(data.usage?.server_time || data.server_time);
     state.clockOffset = Number.isFinite(serverTime) ? serverTime - Date.now() : 0;
-    state.resets = { hour: Date.parse(data.usage?.hour_resets_at), day: Date.parse(data.usage?.day_resets_at), week: Date.parse(data.usage?.week_resets_at) };
-    state.remaining = { hour: hourlyRemaining, day: remaining, week: weeklyRemaining };
+    state.resets = { day: Date.parse(data.usage?.day_resets_at) };
+    state.remaining = { day: remaining };
     state.lastRefreshAt = Date.now();
     state.lastRefreshAttempt = state.lastRefreshAt;
     state.stale = false;
 
     byId("daily-limit").textContent = formattedNumber(state.daily);
+    byId("daily-token-credit").textContent = state.daily === 1000000000 ? "1 milyar" : formattedNumber(state.daily);
     byId("empty-daily-limit").textContent = formattedNumber(state.daily);
     byId("minute-limit").textContent = formattedNumber(state.minute);
     byId("usage-count").textContent = formattedNumber(usage);
+    if (byId("remaining-token-count")) byId("remaining-token-count").textContent = formattedNumber(remaining);
     byId("model-id").value = state.model;
-    byId("remaining-label").textContent = `${formattedNumber(remaining)} istek kaldı · Her gün yenilenir`;
     byId("usage-progress").max = state.daily || 1;
     byId("usage-progress").value = usage;
-    byId("hourly-limit").textContent = formattedNumber(state.hourly);
-    byId("hourly-usage-count").textContent = formattedNumber(hourlyUsage);
-    byId("hourly-remaining-label").textContent = `${formattedNumber(hourlyRemaining)} istek kaldı · Her saat yenilenir`;
-    byId("hourly-progress").max = state.hourly || 1;
-    byId("hourly-progress").value = hourlyUsage;
-    byId("weekly-limit").textContent = formattedNumber(state.weekly);
-    byId("weekly-usage-count").textContent = formattedNumber(weeklyUsage);
-    byId("weekly-remaining-label").textContent = `${formattedNumber(weeklyRemaining)} istek kaldı · Her hafta yenilenir`;
-    byId("weekly-progress").max = state.weekly || 1;
-    byId("weekly-progress").value = weeklyUsage;
+    byId("input-token-count").textContent = formattedNumber(input);
+    byId("output-token-count").textContent = formattedNumber(output);
+    byId("reserved-token-note").textContent = reserved > 0 ? `${formattedNumber(reserved)} token devam eden istekler için ayrıldı.` : "";
+    byId("reserved-token-note").hidden = reserved === 0;
     byId("key-loading").hidden = true;
     byId("key-error").hidden = true;
     byId("key-empty").hidden = Boolean(state.key);
@@ -293,12 +286,9 @@
     byId("usage-updated").textContent = state.stale ? "Yenilenemedi · Son alınan veriler gösteriliyor" : age < 60000 ? "Az önce güncellendi" : `${Math.floor(age / 60000)} dk önce güncellendi`;
     byId("usage-updated").classList.toggle("stale", state.stale);
     const now = Date.now() + state.clockOffset;
-    const rows = [["day", "remaining-label", "Her gün yenilenir"], ["hour", "hourly-remaining-label", "Her saat yenilenir"], ["week", "weekly-remaining-label", "Her hafta yenilenir"]];
-    for (const [period, id, fallback] of rows) {
-      const reset = state.resets[period];
-      const when = Number.isFinite(reset) ? reset <= now ? "Yenilenme zamanı geldi" : `${durationLabel(reset - now)} sonra yenilenir` : fallback;
-      byId(id).textContent = `${formattedNumber(state.remaining[period])} istek kaldı · ${when}`;
-    }
+    const reset = state.resets.day;
+    const when = Number.isFinite(reset) ? reset <= now ? "Yenilenme zamanı geldi" : `${durationLabel(reset - now)} sonra yenilenir` : "Her gün 00:00 UTC’de yenilenir";
+    byId("remaining-label").textContent = `${formattedNumber(state.remaining.day)} token kaldı · ${when}`;
   }
 
   function scheduleRefresh() {
@@ -639,12 +629,12 @@
       info.append(name, element("span", "user-created", dateLabel(user.created_at) || "Hesap oluşturuldu"));
       identity.append(info);
       const limits = element("div", "user-limits");
-      limits.append(element("span", "", `${formattedNumber(user.hourly_limit ?? 20)} / saat`), element("span", "", `${formattedNumber(user.daily_limit)} / gün`), element("span", "", `${formattedNumber(user.weekly_limit ?? 200)} / hafta`), element("span", "", `${formattedNumber(user.requests_per_minute)} / dakika`));
+      limits.append(element("span", "", `${formattedNumber(user.daily_tokens ?? 1000000000)} token / gün`), element("span", "", `${formattedNumber(user.requests_per_minute ?? 5)} istek / dakika`));
       const status = element("span", `user-state${user.enabled ? "" : " disabled"}`);
       status.append(element("span"), document.createTextNode(user.enabled ? "Aktif" : "Kapalı"));
       const own = user.username.toLowerCase() === state.user.username.toLowerCase();
       const actions = element("div", "user-actions");
-      actions.append(actionButton("Kotalar", () => openUserDialog("quota", user), false, user.username),
+      actions.append(actionButton("Hız sınırı", () => openUserDialog("quota", user), false, user.username),
         actionButton("Şifre sıfırla", () => openUserDialog("password", user), own, user.username),
         actionButton(user.enabled ? "Erişimi kapat" : "Erişimi aç", () => toggleUser(user), user.role === "admin" || own, user.username));
       row.append(identity, limits, status, actions);
@@ -690,13 +680,10 @@
     byId("user-password").required = mode !== "quota";
     byId("user-password").disabled = mode === "quota";
     byId("user-quota-group").hidden = mode === "password";
-    for (const id of ["user-daily", "user-hourly", "user-weekly", "user-minute"]) byId(id).disabled = mode === "password";
-    byId("user-daily").value = user?.daily_limit ?? 50;
-    byId("user-hourly").value = user?.hourly_limit ?? 20;
-    byId("user-weekly").value = user?.weekly_limit ?? 200;
+    byId("user-minute").disabled = mode === "password";
     byId("user-minute").value = user?.requests_per_minute ?? 5;
-    byId("user-dialog-title").textContent = mode === "create" ? "Kullanıcı ekle" : mode === "quota" ? "Kullanım kotaları" : "Şifreyi sıfırla";
-    byId("user-dialog-description").textContent = mode === "create" ? "Yeni kullanıcıya bir kullanıcı adı ve şifre belirle." : mode === "quota" ? "Bu hesaba ait anahtarların kullanım sınırlarını güncelle." : "Kullanıcının eski şifresi geçersiz olacak. Yeni şifreyi güvenli bir kanaldan ilet.";
+    byId("user-dialog-title").textContent = mode === "create" ? "Kullanıcı ekle" : mode === "quota" ? "Anlık hız sınırı" : "Şifreyi sıfırla";
+    byId("user-dialog-description").textContent = mode === "create" ? "Kullanıcı adı ve şifre belirle. Her hesap günlük ücretsiz 1 milyar tokenla başlar." : mode === "quota" ? "Dakikalık istek hızını güncelle. Günlük 1 milyar token hakkı tüm hesaplar için aynıdır." : "Kullanıcının eski şifresi geçersiz olacak. Yeni şifreyi güvenli bir kanaldan ilet.";
     byId("save-user").textContent = mode === "create" ? "Kullanıcı oluştur" : "Değişiklikleri kaydet";
     byId("user-dialog").showModal();
     if (mode === "password") byId("user-password").focus();
@@ -710,9 +697,6 @@
     const payload = { username: byId("user-username").value.trim() };
     if (mode !== "quota") payload.password = byId("user-password").value;
     if (mode !== "password") {
-      payload.daily_limit = Number(byId("user-daily").value);
-      payload.hourly_limit = Number(byId("user-hourly").value);
-      payload.weekly_limit = Number(byId("user-weekly").value);
       payload.requests_per_minute = Number(byId("user-minute").value);
     }
     byId("save-user").disabled = true;
@@ -883,6 +867,7 @@
   byId("reveal-key").addEventListener("click", () => { state.revealed = !state.revealed; renderSecret(); });
   byId("copy-key").addEventListener("click", () => { if (state.secret) copy(state.secret, "API anahtarın kopyalandı"); });
   byId("copy-example").addEventListener("click", () => copy(exampleFor(state.secret || "YOUR_KEY"), "İstek örneği kopyalandı"));
+  if (byId("copy-overview-code")) byId("copy-overview-code").addEventListener("click", () => copy(exampleFor(state.secret || "YOUR_KEY"), "İstek örneği kopyalandı"));
   byId("copy-codex-config")?.addEventListener("click", () => copy(codexConfig(), configNotice("kopyalandı")));
   byId("download-codex-config")?.addEventListener("click", downloadCodexConfig);
   document.querySelectorAll("[data-copy-target]").forEach((button) => button.addEventListener("click", () => copy(byId(button.dataset.copyTarget).value, "Kopyalandı")));

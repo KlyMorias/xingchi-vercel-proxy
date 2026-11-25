@@ -8,9 +8,9 @@ const source = fs.readFileSync(path.join(__dirname, '../assets/key.js'), 'utf8')
 
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
 const token = suffix => `kly_${suffix.repeat(43)}`;
-function account({ username = 'Owner', role = 'admin', key = null } = {}) {
-  return { user: { username, role, enabled: true }, key, limits: { hourly_requests: 20, daily_requests: 50, weekly_requests: 200, requests_per_minute: 5 },
-    usage: { used_today: 0, remaining_today: 50, used_this_hour: 0, remaining_this_hour: 20, used_this_week: 0, remaining_this_week: 200 },
+function account({ username = 'Owner', role = 'admin', key = null, usage = {} } = {}) {
+  return { user: { username, role, enabled: true, daily_tokens: 1000000000, requests_per_minute: 5 }, key, limits: { daily_tokens: 1000000000, requests_per_minute: 5 },
+    usage: { input_tokens_today: 0, output_tokens_today: 0, total_tokens_today: 0, reserved_tokens_today: 0, remaining_tokens_today: 1000000000, ...usage },
     service: { model: 'gpt-6.1-sol', models: [{ id: 'gpt-6.1-sol' }], generation_available: true } };
 }
 function metadata(secret, created = '2026-11-21T00:00:00Z') {
@@ -57,6 +57,7 @@ function fixture(initial = account(), { lazyModule = false } = {}) {
     showModal() { this.open = true; }
     close() { this.open = false; for (const callback of this.events.get('close') || []) callback({ currentTarget: this }); }
     reset() {}
+    reportValidity() { return true; }
     scrollIntoView() {}
     remove() {}
     click() { return this.emit('click'); }
@@ -82,7 +83,7 @@ function fixture(initial = account(), { lazyModule = false } = {}) {
   const schedule = (callback, delay, interval = false) => { const id = nextTimer++; timers.set(id, { callback, due: now + delay, delay, interval }); return id; };
   const response = (body, status = 200) => ({ ok: status >= 200 && status < 300, status, headers: { get: () => null }, json: async () => structuredClone(body) });
   const fetch = async (url, options) => {
-    calls.push({ url, method: options.method, signal: options.signal });
+    calls.push({ url, method: options.method, signal: options.signal, body: options.body });
     const custom = handler && await handler(url, options);
     if (custom) return custom;
     if (url === '/api/account') return response(snapshot);
@@ -111,10 +112,12 @@ test('client retains a newly created key for matching refreshes and clears it on
   const f = fixture(); await f.flush(); assert.equal(f.calls.filter(c => c.url === '/api/account').length, 1);
   await f.click('nav-playground');
   await f.click('create-key'); await f.click('reveal-key'); assert.equal(f.byId('key-value').textContent, token('A'));
+  assert.ok(f.byId('overview-code').textContent.includes(token('A')));
   await f.click('refresh-usage'); assert.equal(f.byId('key-value').textContent, token('A'));
   f.setSnapshot(account({ key: metadata(token('B')) })); await f.click('refresh-usage');
   assert.equal(f.byId('reveal-key').hidden, true); assert.equal(f.byId('copy-key').hidden, true);
   assert.equal(f.byId('key-value').textContent.includes(token('A')), false);
+  assert.equal(f.byId('overview-code').textContent.includes(token('A')), false);
   await f.click('copy-codex-config'); assert.ok(f.copied.at(-1).includes(config.PLACEHOLDER)); assert.equal(f.copied.at(-1).includes(token('A')), false);
   assert.ok(f.playground.clears > 0);
 });
@@ -168,4 +171,37 @@ test('playground loads once on demand and a pending module cannot initialize aft
   assert.ok(f.playground.options);
   assert.equal(f.document.head.children.length, 1);
   assert.equal(f.playground.options.getKey(), null);
+});
+
+test('dashboard renders actual token usage and reservations without interpreting legacy request counts as tokens', async () => {
+  const snapshot = account({ usage: { input_tokens_today: 1250, output_tokens_today: 750, total_tokens_today: 2000,
+    reserved_tokens_today: 3000, remaining_tokens_today: 999995000, used_today: 50,
+    server_time: '2026-11-21T12:00:00Z', day_resets_at: '2026-11-22T00:00:00Z' } });
+  const f = fixture(snapshot); await f.flush();
+  assert.equal(f.byId('daily-token-credit').textContent, '1 milyar');
+  assert.equal(f.byId('daily-limit').textContent, '1.000.000.000');
+  assert.equal(f.byId('usage-count').textContent, '2.000');
+  assert.equal(f.byId('remaining-token-count').textContent, '999.995.000');
+  assert.equal(f.byId('input-token-count').textContent, '1.250');
+  assert.equal(f.byId('output-token-count').textContent, '750');
+  assert.equal(f.byId('usage-progress').max, 1000000000);
+  assert.equal(f.byId('usage-progress').value, 2000);
+  assert.match(f.byId('remaining-label').textContent, /^999\.995\.000 token kaldı · 12 sa sonra yenilenir$/);
+  assert.equal(f.byId('reserved-token-note').hidden, false);
+  assert.match(f.byId('reserved-token-note').textContent, /^3\.000 token/);
+  f.setSnapshot(account()); await f.click('refresh-usage');
+  assert.equal(f.byId('reserved-token-note').hidden, true);
+  assert.equal(f.byId('usage-count').textContent, '0');
+  assert.match(f.byId('remaining-label').textContent, /^1\.000\.000\.000 token kaldı/);
+});
+
+test('admin creates an account with a rate limit and the common daily token allowance', async () => {
+  const f = fixture(); await f.flush(); await f.click('add-user');
+  assert.equal(f.byId('user-dialog').open, true);
+  assert.match(f.byId('user-dialog-description').textContent, /1 milyar token/);
+  f.byId('user-username').value = 'Guest_2'; f.byId('user-password').value = 'temporary-test-password';
+  f.byId('user-minute').value = '10'; await f.byId('user-form').emit('submit'); await f.flush();
+  const saved = f.calls.find(call => call.url === '/api/users' && call.method === 'POST');
+  assert.deepEqual(JSON.parse(saved.body), { username: 'Guest_2', password: 'temporary-test-password', requests_per_minute: 10 });
+  assert.equal(f.byId('user-dialog').open, false);
 });
