@@ -59,7 +59,7 @@ Parolalar Node.js scrypt ile ayrı rastgele salt kullanılarak hash'lenir. Oturu
 3. Hedefteki veriyi ve sürümü yeniden okuyup doğrula; sonra Vercel ve büyük istek geçidini aynı `DATABASE_URL` ile etkinleştir. Eski depoyu silme. Eski snapshot'a erişilemiyorsa kullanıcılar ve anahtarlar aktarılmış sayılmaz; yeni kurulumda yeniden oluşturulmaları gerekir.
 4. Giriş, anahtar oluşturma, gerçek model çağrısı, kullanım/kota hesabı ve iptal akışını canlıda ayrıca doğrula.
 
-25 Kasım 2026 durumu: ücretsiz Neon projesi oluşturuldu; yeni kurulum onaylandı, etkinleştirme ve kalıcı depolama/kota akışının canlı doğrulaması bekliyor. Eski Blob verisi değiştirilmeden korunur; bu not tamamlanmış veri aktarımı iddiası değildir.
+25 Kasım 2026 durumu: kullanıcı onayıyla yeni Neon deposu başlangıç yönetici kaydıyla oluşturuldu ve hem Vercel hem Render üzerinde etkinleştirildi. Eski Blob verisi aktarılmadı ve değiştirilmeden korundu; eski kullanıcılar ve API anahtarları yeniden oluşturulmalıdır. Üretim API'sinde 101 tamamlanmış araç turu içeren geçmişle Sol SSE yanıtı, doğrudan Render üretimi ve toplam 21.769 tokenın kalıcı kotaya tam işlenmesi doğrulandı; açık rezervasyon kalmadı. Aynı Vercel adresinden Content-Length içeren tam 50 MiB gövde uygulama doğrulamasına ulaştı. Test kayıtları temizlendi; ayrı salt-okunur kontrolde başlangıç yöneticisi korunmuş, diğer hesap/anahtar/kota kayıtları boş bulundu. Bunlar tekil sentetik doğrulamalardır; 101 ardışık canlı istek, model bağlam kapasitesi veya hız garantisi değildir.
 
 Yalnızca `DATABASE_URL` kullanmayacaksan özel Blob deposunu isteğe bağlı geri dönüş backend'i olarak projeye bağla:
 
