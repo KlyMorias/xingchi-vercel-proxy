@@ -139,6 +139,28 @@ test("coarse pointers never receive pointer or scroll parallax", () => {
   assert.equal(f.photo.style.getPropertyValue("--scroll-shift"), "");
 });
 
+test("photo motion pauses outside the viewport and in hidden views, including on touch screens", () => {
+  for (const fine of [true, false]) {
+    const f = fixture({ fine });
+    assert.equal(f.photo.classList.contains("motion-in-view"), true);
+    f.photo.box.top = -600;
+    f.window.emit("scroll"); f.flush();
+    assert.equal(f.photo.classList.contains("motion-in-view"), false);
+    f.photo.box.top = 100;
+    f.window.emit("scroll"); f.flush();
+    assert.equal(f.photo.classList.contains("motion-in-view"), true);
+    f.photo.hidden = true;
+    f.window.emit("hashchange"); f.flush();
+    assert.equal(f.photo.classList.contains("motion-in-view"), false);
+    f.photo.hidden = false;
+    f.window.emit("hashchange"); f.flush();
+    assert.equal(f.photo.classList.contains("motion-in-view"), true);
+    f.window.emit("pagehide");
+    assert.equal(f.photo.classList.contains("motion-in-view"), false);
+    assert.equal(f.frames.size, 0);
+  }
+});
+
 test("changing to reduced motion cancels pending frames and clears every managed state", () => {
   const below = node({ top: 1400 });
   const f = fixture({ candidates: [below] });

@@ -6,6 +6,8 @@ const { startKeepalive } = require("../lib/client-keepalive");
 const { DEFAULT_MODEL, resolveModel, availableModels, modelCatalog } = require("../lib/models");
 const { readJsonBody } = require("../lib/request-body");
 const { estimatedTokens, actualTokens } = require("../lib/token-usage");
+const { prepareConversationHistory } = require("../lib/conversation-history");
+const { normalizeProviderError } = require("../lib/provider-errors");
 
 const UPSTREAM_ORIGIN = "https://api.xingchiapi.com";
 const ALLOWED_ROUTES = new Set([
@@ -132,7 +134,7 @@ return async function handler(req, res) {
   res.setHeader("access-control-allow-origin", "*");
   res.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
   res.setHeader("access-control-allow-headers", "authorization, content-type, content-encoding, x-api-key, x-proxy-key, anthropic-version, anthropic-beta, openai-beta, anthropic-dangerous-direct-browser-access");
-  res.setHeader("access-control-expose-headers", "retry-after, x-request-id, x-klyapi-error-source, server-timing");
+  res.setHeader("access-control-expose-headers", "retry-after, x-request-id, x-klyapi-error-source, x-klyapi-history, server-timing");
   if (req.method === "OPTIONS") {
     res.statusCode = 204;
     res.setHeader("allow", "GET, POST, OPTIONS");
@@ -216,6 +218,12 @@ return async function handler(req, res) {
           upstreamPayload.input = [{ role: "user", content: [{ type: "input_text", text: upstreamPayload.input }] }];
         }
       }
+      // The provider also counts historical tool calls toward its 100-turn cap.
+      // Pack only safe, completed old records as untrusted JSON data. This is
+      // lossless history folding, not an additional model/summary request.
+      const history = prepareConversationHistory(upstreamPayload);
+      upstreamPayload = history.payload;
+      if (history.folded) res.setHeader("x-klyapi-history", "folded");
       body = JSON.stringify({ ...upstreamPayload, instructions: upstreamPayload.instructions || "You are a helpful assistant.", stream: true, store: false });
       tokenBudget = estimatedTokens(body, upstreamPayload.max_output_tokens);
     } catch (error) {
@@ -314,7 +322,7 @@ return async function handler(req, res) {
       keepalive?.stop();
       if (!res.headersSent) {
         res.setHeader("x-klyapi-error-source", "upstream");
-        await writeUpstreamResponse(upstream, res);
+        await writeUpstreamResponse(await normalizeProviderError(upstream), res);
       } else {
         const failure = { error: { type: "upstream_error", code: "upstream_http_error", message: "Provider returned an error. Retry later.", upstream_status: upstream.status } };
         if (!clientStream) res.end(JSON.stringify(failure));

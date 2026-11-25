@@ -8,12 +8,12 @@
     <title>API Anahtarın · KlyAPI</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='17' fill='%23ffffff'/%3E%3Cpath d='M19 16v32m26-32L28 32l17 16' fill='none' stroke='%23111111' stroke-width='7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
     <link rel="stylesheet" href="/assets/console.css?v=8c063263ed">
-    <link rel="stylesheet" href="/assets/editorial.css?v=a72f37f07d">
+    <link rel="stylesheet" href="/assets/editorial.css?v=d32ec62a52">
     <script src="/assets/codex-config.js?v=2726ccfa97" defer></script>
     <script src="/assets/key.js?v=975f216d41" defer></script>
-    <script src="/assets/motion.js?v=bf3af0f586" defer></script>
+    <script src="/assets/motion.js?v=e0898f3dc1" defer></script>
   </head>
-  <body class="auth-pending">
+  <body class="auth-pending editorial-console">
     <div class="auth-cover" id="auth-cover"><span class="brand-mark">K<span>↗</span></span><span id="auth-status">Oturum kontrol ediliyor…</span><button class="button subtle" id="retry-auth" type="button" hidden>Yeniden dene</button></div>
     <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
       <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="8" r="4.5"/><path d="m11.3 11.3 9.2 9.2M16 16l2.5-2.5M18.5 18.5l2-2"/></symbol>
@@ -41,13 +41,15 @@
     <header class="site-header">
       <div class="header-inner">
         <a class="brand" href="/key" aria-label="KlyAPI anahtar paneli"><span class="brand-mark" aria-hidden="true">K<span>↗</span></span><span>KlyAPI</span><span class="brand-console">console</span></a>
+        <div class="rail-intro" aria-hidden="true"><span>ÇALIŞMA ALANI</span><p>Bir sonraki<br>fikrine bağlan.</p></div>
         <nav class="primary-nav" aria-label="Konsol menüsü">
-          <button class="nav-link current" id="nav-overview" type="button"><svg><use href="#i-grid"/></svg><span>Genel bakış</span></button>
-          <button class="nav-link" id="nav-playground" type="button"><svg><use href="#i-bolt"/></svg><span>Deneme alanı</span></button>
-          <button class="nav-link" id="nav-models" type="button"><svg><use href="#i-code"/></svg><span>Modeller</span></button>
-          <a class="nav-link" id="nav-start" href="#setup"><svg><use href="#i-desktop"/></svg><span>Kurulum</span></a>
-          <button class="nav-link" id="nav-users" type="button" hidden><svg><use href="#i-users"/></svg><span>Kullanıcılar</span></button>
+          <button class="nav-link current" id="nav-overview" type="button"><svg><use href="#i-grid"/></svg><span>Genel bakış</span><span class="nav-index" aria-hidden="true">01</span></button>
+          <button class="nav-link" id="nav-playground" type="button"><svg><use href="#i-bolt"/></svg><span>Deneme alanı</span><span class="nav-index" aria-hidden="true">02</span></button>
+          <button class="nav-link" id="nav-models" type="button"><svg><use href="#i-code"/></svg><span>Modeller</span><span class="nav-index" aria-hidden="true">03</span></button>
+          <a class="nav-link" id="nav-start" href="#setup"><svg><use href="#i-desktop"/></svg><span>Kurulum</span><span class="nav-index" aria-hidden="true">04</span></a>
+          <button class="nav-link" id="nav-users" type="button" hidden><svg><use href="#i-users"/></svg><span>Kullanıcılar</span><span class="nav-index" aria-hidden="true">05</span></button>
         </nav>
+        <div class="rail-status" aria-hidden="true"><span>TEK BAĞLANTI.</span><p>Responses · Chat · Messages</p></div>
         <div class="account-controls"><span class="account-avatar" id="account-avatar">K</span><span class="account-name" id="account-name">Hesabım</span><button class="icon-button" type="button" id="change-password" aria-label="Şifre değiştir" title="Şifre değiştir"><svg><use href="#i-lock"/></svg></button><button class="icon-button" type="button" id="logout" aria-label="Çıkış yap" title="Çıkış yap"><svg><use href="#i-logout"/></svg></button></div>
         <div hidden aria-hidden="true"><span id="sidebar-avatar">K</span><span id="sidebar-user">Hesabım</span><span id="sidebar-role">Kullanıcı</span><a id="sidebar-setup-link" href="#setup">Kurulum</a></div>
       </div>
@@ -57,14 +59,15 @@
       <main>
         <div id="overview-view">
           <section class="cinematic-hero" aria-labelledby="page-title">
-            <div class="hero-image-wrap" aria-hidden="true"><img class="cinematic-image" src="/assets/architecture-hero.webp" srcset="/assets/architecture-hero-small.webp 900w, /assets/architecture-hero.webp 1800w" sizes="(max-width: 780px) 100vw, 1240px" width="1800" height="1125" fetchpriority="high" decoding="async" alt=""></div>
+            <div class="hero-image-wrap" aria-hidden="true"><picture><source media="(max-width: 780px)" srcset="/assets/architecture-hero-small.webp"><img class="cinematic-image" src="/assets/architecture-hero.webp" srcset="/assets/architecture-hero-small.webp 900w, /assets/architecture-hero.webp 1800w" sizes="(max-width: 780px) 100vw, 1240px" width="1800" height="1125" fetchpriority="high" decoding="async" alt=""></picture></div>
             <div class="hero-shade" aria-hidden="true"></div><div class="hero-shutter" aria-hidden="true"></div>
-            <div class="hero-meta"><span>FİKİRDEN ÜRETİME</span><span>KLYAPI / 01</span></div>
+            <div class="hero-meta"><span>FİKİRDEN ÜRETİME</span><span>GELİŞTİRİCİ KONSOLU / 01</span></div>
             <div class="hero-content"><h1 class="hero-title" id="page-title"><span class="hero-title-line"><span>Fikrini</span></span> <span class="hero-title-line"><span>çalıştır.</span></span></h1></div>
-            <div class="hero-bottom"><div><p class="hero-summary">Anahtarını oluştur, modelini dene ve uygulamanı bağla.</p><div class="hero-actions"><a class="hero-cta" href="#playground"><span>Modeli dene</span><span class="action-circle" aria-hidden="true"><svg><use href="#i-arrow"/></svg></span></a><a class="hero-secondary" href="#setup">Kurulum<svg aria-hidden="true"><use href="#i-arrow"/></svg></a></div></div><div class="hero-caption"><a class="hero-scroll" href="#anahtar">Konsolu keşfet<svg aria-hidden="true"><use href="#i-arrow"/></svg></a><a class="photo-credit" href="https://unsplash.com/photos/a-black-and-white-photo-of-a-curved-concrete-structure-ulFAi1jkNcA" target="_blank" rel="noopener noreferrer">Fotoğraf: Jonny James / Unsplash</a></div></div>
+            <aside class="hero-allowance" aria-label="Günlük ücretsiz kullanım"><span>HER GÜN, YENİDEN.</span><strong>1 milyar</strong><p>ücretsiz token / gün</p></aside>
+            <div class="hero-bottom"><div><p class="hero-summary">Anahtarın, modellerin, bir sonraki fikrin.<br>Hepsi aynı çalışma alanında.</p><div class="hero-actions"><a class="hero-cta" href="#playground"><span>Modeli dene</span><span class="action-circle" aria-hidden="true"><svg><use href="#i-arrow"/></svg></span></a><a class="hero-secondary" href="#setup">Kurulum<svg aria-hidden="true"><use href="#i-arrow"/></svg></a></div></div><div class="hero-caption"><a class="hero-scroll" href="#anahtar">Konsolu keşfet<svg aria-hidden="true"><use href="#i-arrow"/></svg></a><a class="photo-credit" href="https://unsplash.com/photos/a-black-and-white-photo-of-a-curved-concrete-structure-ulFAi1jkNcA" target="_blank" rel="noopener noreferrer">Fotoğraf: Jonny James / Unsplash</a></div></div>
           </section>
           <div class="protocol-ribbon" aria-hidden="true"><div class="protocol-track"><div class="protocol-group"><span>RESPONSES API</span><i>+</i><span>CHAT COMPLETIONS</span><i>+</i><span>MESSAGES API</span><i>+</i><span>CODEX READY</span><i>+</i></div><div class="protocol-group"><span>RESPONSES API</span><i>+</i><span>CHAT COMPLETIONS</span><i>+</i><span>MESSAGES API</span><i>+</i><span>CODEX READY</span><i>+</i></div></div></div>
-          <div class="overview-section-label"><span>ÇALIŞMA ALANIN</span><span>01 / KULLANIM</span></div>
+          <div class="overview-section-label"><span>RAKAMLARLA ÇALIŞMA ALANIN</span><span>01 — KULLANIM</span></div>
 
           <section class="usage-overview" aria-labelledby="usage-heading">
             <div class="usage-summary"><div class="usage-summary-title"><span class="status-dot" aria-hidden="true"></span><h2 id="usage-heading">Günlük kullanım</h2><span class="allowance-meta"><strong id="daily-token-credit">1 milyar</strong> token / gün</span></div><div class="usage-summary-tools"><span class="free-plan" id="token-unit-cost">Ücretsiz plan</span><button class="icon-button" id="refresh-usage" type="button" aria-label="Token kullanımını yenile" title="Token kullanımını yenile"><svg><use href="#i-refresh"/></svg></button></div></div>
@@ -78,6 +81,7 @@
             <span hidden id="daily-limit">1.000.000.000</span>
           </section>
 
+          <div class="overview-section-label access-section-label"><span>BAĞLANTIYI KUR</span><span>02 — ERİŞİM</span></div>
           <div class="dashboard-grid">
             <section class="panel key-panel" id="anahtar" aria-labelledby="key-heading">
               <div class="panel-heading"><div><div class="panel-kicker">ERİŞİM YÖNETİMİ</div><h2 id="key-heading">API anahtarın</h2></div><span class="outline-badge" id="key-badge">Yükleniyor</span></div>

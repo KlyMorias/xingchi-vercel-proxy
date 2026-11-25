@@ -81,11 +81,15 @@
     }
   }
   function updatePhotos() {
-    if (!finePointer?.matches) return;
     const height = viewportHeight();
     for (const [node, photo] of photos) {
-      const box = visibleBox(node);
-      if (!box || box.bottom <= 0 || box.top >= height) { clearPhoto(node); continue; }
+      // Geometry is enough for presentation visibility. Inherited visibility is
+      // initially hidden behind the auth cover; that cover already pauses CSS.
+      const box = node.isConnected && !node.closest("[hidden], [inert]") ? node.getBoundingClientRect() : null;
+      const inView = box && box.width > 0 && box.height > 0 && box.bottom > 0 && box.top < height;
+      if (inView) node.classList.add("motion-in-view");
+      else node.classList.remove("motion-in-view");
+      if (!inView || !finePointer?.matches) { clearPhoto(node); continue; }
       const x = photo.pointer ? clamp(((photo.pointer.x - box.left) / box.width - 0.5) * 16, 8) : 0;
       const y = photo.pointer ? clamp(((photo.pointer.y - box.top) / box.height - 0.5) * 16, 8) : 0;
       const scroll = clamp((height / 2 - box.top - box.height / 2) * 0.075, 35);
@@ -123,7 +127,7 @@
     }
     managed.clear();
     pending.clear();
-    for (const node of photos.keys()) clearPhoto(node);
+    for (const node of photos.keys()) { clearPhoto(node); node.classList.remove("motion-in-view"); }
     photos.clear();
   }
   function start() {
