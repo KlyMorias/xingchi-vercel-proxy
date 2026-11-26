@@ -35,8 +35,9 @@
     const style = window.getComputedStyle(node);
     return style.visibility === "hidden" || style.display === "none" ? null : box;
   }
-  function clearPhoto(node) {
+  function clearPhoto(node, photo) {
     for (const property of ["--pointer-x", "--pointer-y", "--scroll-shift"]) node.style.removeProperty(property);
+    if (photo) photo.offsets = null;
   }
   function finishEntrance() {
     // This flag survives motion suspension. CSS settles only the introductory
@@ -49,9 +50,12 @@
         || document.body?.classList.contains("auth-pending") || !visibleBox(event.target)) return;
     finishEntrance();
   }
-  function reveal(node) {
+  function reveal(node, immediate = false) {
     node.classList.remove("reveal-pending");
-    node.classList.add("is-visible");
+    // Keyboard focus must land on exposed content immediately, without waiting
+    // for a scroll-reveal transition to finish around the focused control.
+    if (immediate) node.classList.remove("is-visible");
+    else node.classList.add("is-visible");
     managed.add(node);
     pending.delete(node);
     seen.add(node);
@@ -60,7 +64,7 @@
   function scan() {
     for (const node of document.querySelectorAll(photoSelector)) {
       if (photos.has(node) || !node.querySelector(".cinematic-image")) continue;
-      const photo = { pointer: null };
+      const photo = { pointer: null, offsets: null };
       photos.set(node, photo);
       if (finePointer?.matches) {
         listen(node, "pointermove", (event) => {
@@ -68,7 +72,9 @@
           photo.pointer = { x: event.clientX, y: event.clientY };
           schedule();
         }, { passive: true });
-        listen(node, "pointerleave", () => { photo.pointer = null; schedule(); }, { passive: true });
+        const resetPointer = () => { photo.pointer = null; schedule(); };
+        listen(node, "pointerleave", resetPointer, { passive: true });
+        listen(node, "pointercancel", resetPointer, { passive: true });
       }
     }
     // The fallback remains fully visible when IntersectionObserver is absent.
@@ -100,13 +106,21 @@
       const inView = box && box.width > 0 && box.height > 0 && box.bottom > 0 && box.top < height;
       if (inView) node.classList.add("motion-in-view");
       else node.classList.remove("motion-in-view");
-      if (!inView || !finePointer?.matches) { clearPhoto(node); continue; }
+      if (!inView || !finePointer?.matches) {
+        // A view reopened from navigation should not inherit a tilt left by a
+        // pointer that is now elsewhere on the page.
+        photo.pointer = null;
+        clearPhoto(node, photo);
+        continue;
+      }
       const x = photo.pointer ? clamp(((photo.pointer.x - box.left) / box.width - 0.5) * 16, 8) : 0;
       const y = photo.pointer ? clamp(((photo.pointer.y - box.top) / box.height - 0.5) * 16, 8) : 0;
       const scroll = clamp((height / 2 - box.top - box.height / 2) * 0.075, 35);
-      node.style.setProperty("--pointer-x", `${x.toFixed(2)}px`);
-      node.style.setProperty("--pointer-y", `${y.toFixed(2)}px`);
-      node.style.setProperty("--scroll-shift", `${scroll.toFixed(2)}px`);
+      const offsets = [x, y, scroll].map((value) => `${value.toFixed(2)}px`);
+      for (const [index, property] of ["--pointer-x", "--pointer-y", "--scroll-shift"].entries()) {
+        if (offsets[index] !== photo.offsets?.[index]) node.style.setProperty(property, offsets[index]);
+      }
+      photo.offsets = offsets;
     }
   }
   function schedule(shouldScan = false) {
@@ -141,7 +155,7 @@
     }
     managed.clear();
     pending.clear();
-    for (const node of photos.keys()) { clearPhoto(node); node.classList.remove("motion-in-view"); }
+    for (const [node, photo] of photos) { clearPhoto(node, photo); node.classList.remove("motion-in-view"); }
     photos.clear();
   }
   function start() {
@@ -164,6 +178,11 @@
     listen(window, "hashchange", () => schedule(true));
     listen(window, "popstate", () => schedule(true));
     listen(document, "animationend", entranceEnded);
+    listen(document, "focusin", (event) => {
+      for (const node of pending) {
+        if (node === event.target || node.contains?.(event.target)) reveal(node, true);
+      }
+    });
     // pushState-based tab changes do not emit hashchange. Scan after the
     // application's click/keyboard handlers have made the target view visible.
     listen(document, "click", (event) => { if (event.target?.closest?.("a, button")) schedule(true); });

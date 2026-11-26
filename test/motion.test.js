@@ -29,6 +29,10 @@ function node({ tag = "section", className = "", top = 100, height = 200, width 
       }
       return null;
     },
+    contains(target) {
+      for (let current = target; current; current = current.parent) if (current === this) return true;
+      return false;
+    },
     querySelector(selector) { return selector === ".cinematic-image" && image ? {} : selector === "form" && form ? {} : null; },
     matches(selector) { return selector.split(",").some((part) => classes.has(part.trim().slice(1))); },
     getBoundingClientRect() { return { ...this.box, bottom: this.box.top + this.box.height }; },
@@ -118,7 +122,7 @@ test("pointer bursts coalesce into one frame and photo offsets are bounded", () 
   assert.equal(f.frames.size, 1);
   assert.equal(f.photo.writes, initialWrites, "Pointer events must not perform eager style writes");
   f.flush();
-  assert.equal(f.photo.writes, initialWrites + 3);
+  assert.equal(f.photo.writes, initialWrites + 2, "Only the two changed pointer axes need style writes");
   assert.equal(f.photo.style.getPropertyValue("--pointer-x"), "8.00px");
   assert.equal(f.photo.style.getPropertyValue("--pointer-y"), "8.00px");
   assert.equal(f.frames.size, 0, "No idle requestAnimationFrame loop");
@@ -130,6 +134,71 @@ test("pointer bursts coalesce into one frame and photo offsets are bounded", () 
   f.photo.box.top = -500;
   f.window.emit("scroll"); f.flush();
   assert.equal(f.photo.style.getPropertyValue("--scroll-shift"), "");
+});
+
+test("stationary pointer and unchanged geometry do not rewrite photo transforms", () => {
+  const f = fixture();
+  const initialWrites = f.photo.writes;
+  f.photo.emit("pointermove", { pointerType: "mouse", clientX: 500, clientY: 300 });
+  f.flush();
+  assert.equal(f.photo.writes, initialWrites, "A centered pointer already matches the resting transform");
+  f.photo.emit("pointermove", { pointerType: "mouse", clientX: 700, clientY: 200 });
+  f.flush();
+  const movedWrites = f.photo.writes;
+  assert.equal(movedWrites, initialWrites + 2);
+  f.photo.emit("pointermove", { pointerType: "mouse", clientX: 700, clientY: 200 });
+  f.photo.emit("pointermove", { pointerType: "mouse", clientX: 700, clientY: 200 });
+  f.window.emit("scroll");
+  f.window.emit("resize");
+  assert.equal(f.frames.size, 1);
+  f.flush();
+  assert.equal(f.photo.writes, movedWrites);
+  assert.equal(f.frames.size, 0);
+});
+
+test("cancelled pointers and reopened hero views return to their resting tilt", () => {
+  const f = fixture();
+  const move = () => {
+    f.photo.emit("pointermove", { pointerType: "pen", clientX: 1000, clientY: 500 });
+    f.flush();
+    assert.equal(f.photo.style.getPropertyValue("--pointer-x"), "8.00px");
+  };
+  move();
+  f.photo.emit("pointercancel"); f.flush();
+  assert.equal(f.photo.style.getPropertyValue("--pointer-x"), "0.00px");
+  assert.equal(f.photo.style.getPropertyValue("--pointer-y"), "0.00px");
+  for (const hidden of [true, false]) {
+    move();
+    if (hidden) f.photo.hidden = true;
+    else f.photo.box.top = -600;
+    f.window.emit("hashchange"); f.flush();
+    assert.equal(f.photo.style.getPropertyValue("--pointer-x"), "");
+    f.photo.hidden = false; f.photo.box.top = 100;
+    f.window.emit("hashchange"); f.flush();
+    assert.equal(f.photo.style.getPropertyValue("--pointer-x"), "0.00px");
+    assert.equal(f.photo.style.getPropertyValue("--pointer-y"), "0.00px");
+  }
+  f.window.emit("pagehide");
+  f.photo.emit("pointercancel");
+  assert.equal(f.frames.size, 0, "Stopped motion must remove pointer-cancel handling");
+});
+
+test("keyboard focus immediately exposes its pending panel without a reveal transition", () => {
+  const below = node({ top: 1400 });
+  const other = node({ top: 1700 });
+  const button = node({ tag: "button", top: 1420 }); button.parent = below;
+  const f = fixture({ candidates: [below, other] });
+  assert.equal(below.classList.contains("reveal-pending"), true);
+  f.document.emit("focusin", { target: button });
+  assert.equal(below.classList.contains("reveal-pending"), false);
+  assert.equal(below.classList.contains("is-visible"), false, "Base styles expose focused content without the animated class");
+  assert.equal(f.observers[0].observed.has(below), false);
+  assert.equal(other.classList.contains("reveal-pending"), true, "Other panels keep their independent entrance");
+  assert.equal(f.frames.size, 0);
+  f.window.emit("resize"); f.flush();
+  assert.equal(below.classList.contains("reveal-pending"), false, "Focused content must not be remasked");
+  f.window.emit("pagehide");
+  assert.equal(f.document.listeners.get("focusin")?.size || 0, 0);
 });
 
 test("coarse pointers never receive pointer or scroll parallax", () => {
