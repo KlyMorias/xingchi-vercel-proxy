@@ -13,8 +13,8 @@ function accounting(overrides = {}) {
     provider_balance_status: 'not_exposed', reserved_kind: 'admission_estimate', unknown_requests_today: 0,
     legacy_usage_unknown: false, last_settlement: null, ...overrides };
 }
-function account({ username = 'Owner', role = 'admin', key = null, usage = {} } = {}) {
-  return { user: { username, role, enabled: true, daily_tokens: 1000000000, requests_per_minute: 5 }, key, limits: { daily_tokens: 1000000000, requests_per_minute: 5 },
+function account({ username = 'Owner', role = 'admin', key = null, keys, usage = {} } = {}) {
+  return { user: { username, role, enabled: true, daily_tokens: 1000000000, requests_per_minute: 5 }, key, ...(keys === undefined ? {} : {keys}), limits: { daily_tokens: 1000000000, requests_per_minute: 5 },
     usage: { input_tokens_today: 0, output_tokens_today: 0, total_tokens_today: 0, reserved_tokens_today: 0, remaining_tokens_today: 1000000000,
       used_this_hour: 0, used_today: 0, used_this_week: 0, accounting: accounting(), ...usage },
     service: { model: 'gpt-6.1-sol', models: [{ id: 'gpt-6.1-sol' }], generation_available: true } };
@@ -98,7 +98,24 @@ function fixture(initial = account(), { lazyModule = false } = {}) {
     const custom = handler && await handler(url, options);
     if (custom) return custom;
     if (url === '/api/account') return response(snapshot);
-    if (url === '/api/keys' && options.method === 'POST') { snapshot = { ...snapshot, key: metadata(postKey) }; return response({ ...snapshot, api_key: postKey }, 201); }
+    if (url === '/api/keys' && options.method === 'POST') {
+      const created = {...metadata(postKey), ...(Array.isArray(snapshot.keys) ? {id:'key_created',name:JSON.parse(options.body).name} : {})};
+      snapshot = { ...snapshot, key: created, ...(Array.isArray(snapshot.keys) ? {keys:[...snapshot.keys,created]} : {}) };
+      return response({ ...snapshot, api_key: postKey }, 201);
+    }
+    if (url === '/api/keys' && options.method === 'GET') return response(snapshot);
+    if (url === '/api/keys' && options.method === 'DELETE') {
+      const {id} = JSON.parse(options.body);
+      const keys = (snapshot.keys || []).filter(key=>key.id!==id);
+      snapshot = {...snapshot,keys,key:keys[0]||null};
+      return response(null,204);
+    }
+    if (url === '/api/keys' && options.method === 'PATCH') {
+      const {id,name} = JSON.parse(options.body);
+      const keys = snapshot.keys.map(key=>key.id===id?{...key,name}:key);
+      snapshot = {...snapshot,keys,key:keys[0]||null};
+      return response(snapshot);
+    }
     if (url === '/api/users') return response({ users: [snapshot.user] });
     throw new Error(`Unexpected fetch ${options.method} ${url}`);
   };
@@ -110,6 +127,7 @@ function fixture(initial = account(), { lazyModule = false } = {}) {
   const flush = async () => { for (let i = 0; i < 4; i++) await new Promise(resolve => setImmediate(resolve)); };
   const event = async (events, name, detail) => { await Promise.all((events.get(name) || []).map(cb => cb({ preventDefault() {}, ...detail }))); await flush(); };
   return { byId, calls, copied, redirects, playground, response, flush, document, window, languages,
+    async createKey(name='Test') { await byId('create-key').emit('click'); byId('project-key-name').value=name; await byId('project-key-form').emit('submit'); await flush(); },
     async loadModule() { window.KlyPlayground = playgroundModule; document.head.children.at(-1).onload(); await flush(); },
     setSnapshot(value) { snapshot = value; }, setPostKey(value) { postKey = value; }, setHandler(value) { handler = value; },
     click: async id => { await byId(id).emit('click'); await flush(); },
@@ -122,7 +140,7 @@ function fixture(initial = account(), { lazyModule = false } = {}) {
 test('client retains a newly created key for matching refreshes and clears it on external rotation', async () => {
   const f = fixture(); await f.flush(); assert.equal(f.calls.filter(c => c.url === '/api/account').length, 1);
   await f.click('nav-playground');
-  await f.click('create-key'); await f.click('reveal-key'); assert.equal(f.byId('key-value').textContent, token('A'));
+  await f.createKey(); await f.click('reveal-key'); assert.equal(f.byId('key-value').textContent, token('A'));
   assert.ok(f.byId('overview-code').textContent.includes(token('A')));
   await f.click('refresh-usage'); assert.equal(f.byId('key-value').textContent, token('A'));
   f.setSnapshot(account({ key: metadata(token('B')) })); await f.click('refresh-usage');
@@ -131,6 +149,80 @@ test('client retains a newly created key for matching refreshes and clears it on
   assert.equal(f.byId('overview-code').textContent.includes(token('A')), false);
   await f.click('copy-codex-config'); assert.ok(f.copied.at(-1).includes(config.PLACEHOLDER)); assert.equal(f.copied.at(-1).includes(token('A')), false);
   assert.ok(f.playground.clears > 0);
+});
+
+test('project creation opens an editor first and submits only an explicit chosen name', async () => {
+  const f=fixture(account({keys:[]})); await f.flush();
+  await f.click('access-manage-keys');
+  assert.equal(f.byId('project-keys-dialog').open,true);
+  assert.equal(f.calls.some(call=>call.url==='/api/keys'&&call.method==='POST'),false);
+  f.byId('project-key-name').value='Web sitesi'; await f.byId('project-key-form').emit('submit'); await f.flush();
+  assert.deepEqual(JSON.parse(f.calls.find(call=>call.url==='/api/keys'&&call.method==='POST').body),{name:'Web sitesi'});
+  assert.equal(f.byId('selected-key-name').textContent,'Web sitesi');
+  assert.equal(f.byId('copy-key').hidden,false);
+  assert.equal(f.byId('project-keys-dialog').open,false);
+});
+
+test('new project key is selected while the original key remains active and selecting another clears the one-time secret',async()=>{
+  const original={...metadata(token('B')),id:'key_original',name:'Codex'};
+  const f=fixture(account({key:original,keys:[original]})); await f.flush(); await f.createKey('Web');
+  assert.equal(f.byId('key-badge').textContent,'2 aktif anahtar');
+  assert.equal(f.byId('selected-key-name').textContent,'Web');
+  await f.click('reveal-key'); assert.equal(f.byId('key-value').textContent,token('A'));
+  f.byId('project-key-select').value='key_original'; await f.byId('project-key-select').emit('change',{target:f.byId('project-key-select')}); await f.flush();
+  assert.equal(f.byId('selected-key-name').textContent,'Codex');
+  assert.equal(f.byId('copy-key').hidden,true);
+  assert.equal(f.byId('key-value').textContent.includes(token('A')),false);
+  assert.equal(f.calls.some(call=>call.method==='DELETE'),false);
+});
+
+test('replacement opens a named creation flow without revoking any existing client',async()=>{
+  const original={...metadata(token('B')),id:'key_original',name:'Codex'};
+  const f=fixture(account({key:original,keys:[original]})); await f.flush(); await f.click('rotate-key');
+  assert.equal(f.byId('project-keys-dialog').open,true);
+  assert.equal(f.byId('project-key-name').value,'Codex - yeni');
+  assert.equal(f.calls.some(call=>['DELETE','POST'].includes(call.method)),false);
+  assert.match(f.byId('project-key-form-note').textContent,/şimdi iptal edilmeyecek/);
+});
+
+test('revocation submits only the selected opaque id and another project remains usable in the console',async()=>{
+  const a={...metadata(token('B')),id:'key_a',name:'Web'},b={...metadata(token('C')),id:'key_b',name:'Codex'};
+  const f=fixture(account({key:a,keys:[a,b]})); await f.flush(); await f.click('revoke-key');
+  assert.deepEqual(JSON.parse(f.calls.find(call=>call.method==='DELETE').body),{id:'key_a'});
+  assert.equal(f.byId('key-badge').textContent,'1 aktif anahtar');
+  assert.equal(f.byId('selected-key-name').textContent,'Codex');
+  assert.equal(f.byId('key-active').hidden,false);
+});
+
+test('account change to an empty key list scrubs a revealed secret from hidden DOM and examples',async()=>{
+  const f=fixture(account({keys:[]})); await f.flush(); await f.createKey('Web'); await f.click('reveal-key');
+  assert.equal(f.byId('key-value').textContent,token('A'));
+  f.setSnapshot(account({username:'DifferentOwner',role:'user',keys:[]})); await f.click('refresh-usage');
+  assert.equal(f.byId('key-active').hidden,true);
+  for(const id of ['key-value','overview-code','code-example','codex-config']) assert.equal(f.byId(id).textContent.includes(token('A')),false,id);
+  assert.equal(f.byId('key-value').classList.contains('revealed'),false);
+  assert.equal(f.byId('reveal-key').getAttribute('aria-pressed'),'false');
+  assert.equal(f.byId('copy-key').hidden,true);
+});
+
+test('revoking the final project scrubs the one-time plaintext token before hiding its panel',async()=>{
+  const f=fixture(account({keys:[]})); await f.flush(); await f.createKey('Web'); await f.click('reveal-key');
+  await f.click('revoke-key');
+  assert.equal(f.byId('key-active').hidden,true);
+  assert.equal(f.byId('key-empty').hidden,false);
+  for(const id of ['key-value','overview-code','code-example','codex-config']) assert.equal(f.byId(id).textContent.includes(token('A')),false,id);
+  assert.equal(f.byId('reveal-key').hidden,true);
+  assert.equal(f.byId('copy-key').hidden,true);
+});
+
+test('replacement name fits the validated 48-character project name contract',async()=>{
+  const original={...metadata(token('B')),id:'key_original',name:'A'.repeat(48)};
+  const f=fixture(account({key:original,keys:[original]})); await f.flush(); await f.click('rotate-key');
+  const name=f.byId('project-key-name').value;
+  assert.ok(name.length<=48); assert.match(name,/^[\p{L}\p{M}\p{N} _().-]{1,48}$/u);
+  await f.byId('project-key-form').emit('submit'); await f.flush();
+  assert.equal(f.calls.filter(call=>call.method==='POST').length,1);
+  assert.equal(f.calls.some(call=>call.method==='DELETE'),false);
 });
 
 test('an identity/role switch updates the account and cannot restore the previous admin user list', async () => {
@@ -148,7 +240,7 @@ test('an identity/role switch updates the account and cannot restore the previou
 test('BFcache restore revalidates the session and pending key creation cannot resurrect a cleared secret', async () => {
   const f = fixture(); await f.flush(); const pending = deferred();
   f.setHandler((url, options) => url === '/api/keys' && options.method === 'POST' ? pending.promise : undefined);
-  const creating = f.click('create-key'); await f.flush();
+  const creating = f.createKey(); await f.flush();
   f.byId('current-password').value = 'private password';
   await f.windowEvent('pagehide', { persisted: true });
   assert.equal(f.byId('current-password').value, ''); assert.equal(f.playground.disposed, 0);
@@ -250,8 +342,8 @@ test('daily application quota is never fabricated from missing limits or remaini
   assert.equal(f.byId('daily-token-credit').textContent, '—');
   assert.equal(f.byId('minute-limit').textContent, '—');
   assert.equal(f.byId('remaining-token-count').textContent, '—');
-  assert.match(f.byId('usage-coverage').textContent, /Günlük sınır uygulama kotasıdır/);
-  assert.match(f.byId('usage-coverage').textContent, /satın alınmış bakiyesi bildirilmez/);
+  assert.match(fs.readFileSync(path.join(__dirname,'../key.html'),'utf8'), /Günlük 1 milyar token uygulama kotası bütün proje anahtarların arasında paylaşılır/);
+  assert.match(fs.readFileSync(path.join(__dirname,'../key.html'),'utf8'), /Sağlayıcının satın alınmış bakiyesi bu API tarafından bildirilmez/);
 });
 
 test('partial accounting shows recorded lower bounds, estimated holds and no available balance', async () => {
@@ -307,7 +399,7 @@ test('failed refresh retains a visibly stale measured snapshot without changing 
 });
 
 test('request example tabs generate real snippets and copy only the displayed key visibility', async () => {
-  const f = fixture(); await f.flush(); await f.click('create-key');
+  const f = fixture(); await f.flush(); await f.createKey();
   assert.equal(f.byId('overview-code').textContent.includes(token('A')), false);
   await f.languages.javascript.emit('click');
   assert.match(f.byId('overview-code').textContent, /await fetch\("https:\/\/klyapi\.vercel\.app\/api\/v1\/responses"/);

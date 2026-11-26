@@ -60,16 +60,19 @@ test("API tokens are shown once and only their hashes and prefixes are persisted
   assert.equal(JSON.stringify(f.state()).includes(created.api_key), false);
   assert.equal(Date.parse(created.key.expires_at) - Date.parse(created.key.created_at), 30 * 86400000);
   assert.deepEqual(await f.store.getSession("user-alice"), created.key);
-  await assert.rejects(f.store.createKey("user-alice"), { status: 409 });
+  const second = await f.store.createKey("user-alice", "Codex");
+  assert.equal(second.keys.length, 2);
+  assert.equal(second.key.name, "Codex");
+  assert.equal(second.key.prefix, second.api_key.slice(0, 12));
   assert.equal((await f.store.getAccountInfo("user-bob")).key, null);
 });
 
-test("simultaneous creations allow only one active key through Blob ETag CAS", async () => {
+test("simultaneous creations enforce ten active project keys through Blob ETag CAS", async () => {
   const f = fixture();
-  const results = await Promise.allSettled([f.store.createKey("user-alice"), f.store.createKey("user-alice")]);
-  assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
+  const results = await Promise.allSettled(Array.from({ length: 12 }, (_, index) => f.store.createKey("user-alice", "Proje " + index)));
+  assert.equal(results.filter((r) => r.status === "fulfilled").length, 10);
   assert.equal(results.find((r) => r.status === "rejected").reason.status, 409);
-  assert.equal(Object.keys(f.state().keys).length, 1);
+  assert.equal(Object.keys(f.state().keys).length, 10);
 });
 
 test("concurrent admissions never exceed the per-account minute limit", async () => {

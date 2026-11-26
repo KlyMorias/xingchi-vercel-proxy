@@ -56,7 +56,7 @@ async function readBody(req, allowEmpty) {
       : typeof body === "string" ? body : body === undefined ? "" : JSON.stringify(body);
     if (Buffer.byteLength(text) > MAX_BODY_BYTES) throw requestError(413, "body_too_large", "İstek gövdesi çok büyük.");
   }
-  if (!text && allowEmpty) return;
+  if (!text && allowEmpty) return {};
   let value;
   try { value = JSON.parse(text); } catch {
     throw requestError(400, "invalid_json", "Geçerli bir JSON nesnesi gerekli.");
@@ -64,6 +64,7 @@ async function readBody(req, allowEmpty) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw requestError(400, "invalid_json", "Geçerli bir JSON nesnesi gerekli.");
   }
+  return value;
 }
 
 function createHandler(keyStore = store, authProvider = null) {
@@ -71,8 +72,8 @@ return async function handler(req, res) {
   res.setHeader("cache-control", "private, no-store");
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("vary", "Cookie, Origin");
-  if (!["GET", "POST", "DELETE"].includes(req.method)) {
-    res.setHeader("allow", "GET, POST, DELETE");
+  if (!["GET", "POST", "PATCH", "DELETE"].includes(req.method)) {
+    res.setHeader("allow", "GET, POST, PATCH, DELETE");
     sendJson(res, 405, { error: { code: "method_not_allowed", message: "Yöntem desteklenmiyor." } });
     return;
   }
@@ -83,13 +84,19 @@ return async function handler(req, res) {
   try {
     if (!keyStore.isConfigured()) throw requestError(503, "storage_unavailable", "Anahtar servisi şu anda kullanılamıyor.");
     const user = await (authProvider || require("../lib/auth.js")).requireUser(req);
-    if (req.method !== "GET") await readBody(req, req.method === "DELETE");
+    const body = req.method !== "GET" ? await readBody(req, req.method === "DELETE") : {};
+    const allowed = req.method === "POST" ? ["name"] : req.method === "PATCH" ? ["id", "name"] : ["id"];
+    if (Object.keys(body).some(field => !allowed.includes(field))) throw requestError(400, "invalid_fields", "Desteklenmeyen anahtar alanı.");
     if (req.method === "POST") {
-      const created = await keyStore.createKey(user.id);
+      const created = await keyStore.createKey(user.id, body.name);
       sendJson(res, 201, { ...created,
         service: keyStore.serviceInfo });
+    } else if (req.method === "PATCH") {
+      if (!Object.hasOwn(body, "name")) throw requestError(400, "invalid_key_name", "Anahtar adı gerekli.");
+      const info = await keyStore.renameKey(user.id, body.id, body.name);
+      sendJson(res, 200, { ...info, service: keyStore.serviceInfo });
     } else if (req.method === "DELETE") {
-      await keyStore.revokeKey(user.id);
+      await keyStore.revokeKey(user.id, body.id);
       res.statusCode = 204;
       res.end();
     } else {
@@ -97,7 +104,7 @@ return async function handler(req, res) {
       sendJson(res, 200, { ...info, service: keyStore.serviceInfo });
     }
   } catch (error) {
-    const status = [400, 401, 403, 409, 413, 415, 429, 503].includes(error.status) ? error.status : 503;
+    const status = [400, 401, 403, 404, 409, 413, 415, 429, 503].includes(error.status) ? error.status : 503;
     if (error.retryAfter) res.setHeader("retry-after", String(error.retryAfter));
     sendJson(res, status, { error: { code: status === 503 ? "storage_unavailable" : error.code,
       message: status === 503 ? "Anahtar servisi şu anda kullanılamıyor." : error.message } });

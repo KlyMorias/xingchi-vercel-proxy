@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 180" fill="none" role="img" aria-labelledby="flow-title flow-description">
+  <title id="flow-title">Bir anahtar, tek bağlantı, üç uyumlu akış</title>
+  <desc id="flow-description">Anahtar simgesi bir API bağlantı noktasına, bu nokta da üç ayrı protokol yoluna bağlanır. Bu şema kullanım veya hız ölçümü göstermez.</desc>
+  <g stroke="#F2F2EE" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M57 90H131M169 90H206" stroke-opacity=".62" stroke-width="1.5"/>
+    <path d="M206 90H213C218 90 222 86 222 81V43C222 38 226 34 231 34H299M206 90H299M206 90H213C218 90 222 94 222 99V137C222 142 226 146 231 146H299" stroke-opacity=".42" stroke-width="1.5"/>
+    <circle cx="33" cy="90" r="22" stroke-opacity=".22"/>
+    <circle cx="28" cy="89" r="5.5" stroke-width="2"/>
+    <path d="M33.5 89H43M38 89V93M42 89V92" stroke-width="2"/>
+    <rect x="132" y="72" width="36" height="36" rx="10" fill="#F2F2EE" fill-opacity=".08" stroke-opacity=".7"/>
+    <path d="M146 84L140 90L146 96M154 84L160 90L154 96" stroke-width="1.75"/>
+    <circle cx="314" cy="34" r="14" fill="#141414" fill-opacity=".28" stroke-opacity=".33"/>
+    <circle cx="314" cy="90" r="14" fill="#141414" fill-opacity=".28" stroke-opacity=".33"/>
+    <circle cx="314" cy="146" r="14" fill="#141414" fill-opacity=".28" stroke-opacity=".33"/>
+  </g>
+  <g fill="#F2F2EE">
+    <circle cx="314" cy="34" r="3.25"/>
+    <circle cx="314" cy="90" r="3.25"/>
+    <circle cx="314" cy="146" r="3.25"/>
+    <circle cx="206" cy="90" r="2" fill-opacity=".75"/>
+  </g>
+</svg>

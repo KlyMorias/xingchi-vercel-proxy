@@ -126,6 +126,10 @@ async function writeUpstreamResponse(upstream, res) {
 
 function createHandler(store = keyStore, { keepaliveIntervalMs = 8000, bodyLimits } = {}) {
 return async function handler(req, res) {
+  const requestStartedAt = new Date().toISOString();
+  const requestClock = performance.now();
+  const activityDetails = (status, fields = {}) => ({ activity: { status,
+    completed_at: new Date().toISOString(), latency_ms: Math.max(0, Math.round(performance.now() - requestClock)), ...fields } });
   const timings = [];
   const timing = (name, start) => {
     timings.push(`${name};dur=${Math.max(0, performance.now() - start).toFixed(1)}`);
@@ -237,7 +241,8 @@ return async function handler(req, res) {
   {
     try {
       const ip = String(req.headers["x-vercel-forwarded-for"] || req.socket?.remoteAddress || "unknown").split(",")[0].trim();
-      const access = await store.reserve(personalToken, { ip, consumeDaily: req.method === "POST", estimatedTokens: tokenBudget });
+      const access = await store.reserve(personalToken, { ip, consumeDaily: req.method === "POST", estimatedTokens: tokenBudget,
+        request: req.method === 'POST' ? { model: selectedModel.id, endpoint: path, started_at: requestStartedAt } : undefined });
       timing("quota", quotaStart);
       if (!access.ok) {
         if (access.retryAfter) res.setHeader("retry-after", String(access.retryAfter));
@@ -258,7 +263,7 @@ return async function handler(req, res) {
   // Do not start a provider request after that disconnect went unobserved.
   if (req.aborted || res.destroyed) {
     if (reservation) {
-      try { await store.release(reservation); }
+      try { await store.release(reservation, activityDetails('cancelled', { usage_status: 'not_started', error_code: 'client_disconnected' })); }
       catch { diagnostics("refund", { reason: "storage_unavailable" }); }
     }
     return;
@@ -275,14 +280,21 @@ return async function handler(req, res) {
   let quotaSettled = false;
   let terminalReceived = false;
   let providerStarted = false;
-  const settle = async (response) => {
+  let providerHttpStatus = null;
+  const settle = async (response, { presentationError } = {}) => {
     terminalReceived = true;
     if (!reservation || quotaSettled) return;
     const previousPhase = phase;
     phase = "usage";
     const usage = actualTokens(response);
     phase = "settlement";
-    const details = { response_id: response.id, model: response.model };
+    const failed = presentationError || response.status === 'failed' || response.error || !Array.isArray(response.output)
+      || (providerHttpStatus !== null && providerHttpStatus >= 400);
+    const cancelled = response.status === 'cancelled';
+    const details = { response_id: response.id, model: response.model, ...activityDetails(cancelled ? 'cancelled' : failed ? 'error' : 'success', {
+      usage_status: 'verified', http_status: res.headersSent ? res.statusCode : failed || cancelled ? (providerHttpStatus >= 400 ? providerHttpStatus : 502) : 200,
+      error_code: cancelled ? 'upstream_cancelled' : failed ? (providerHttpStatus >= 400 ? 'upstream_http_error'
+        : presentationError && presentationError.code !== 'upstream_generation_failed' ? 'invalid_upstream_response' : 'upstream_generation_failed') : null }) };
     try {
       await store.settle(reservation, usage, details);
     } catch {
@@ -293,16 +305,16 @@ return async function handler(req, res) {
     quotaSettled = true;
     phase = previousPhase;
   };
-  const refund = async () => {
+  const refund = async (details = {}) => {
     if (!reservation || quotaSettled || terminalReceived) return;
-    await store.release(reservation);
+    await store.release(reservation, activityDetails('cancelled', { usage_status: 'not_started', ...details }));
     quotaSettled = true;
   };
-  const recordUnknown = async () => {
+  const recordUnknown = async (details = {}) => {
     if (!reservation || quotaSettled) return;
     // No guessed final charge. A missing terminal, invalid usage, or uncertain
     // write is visible as partial accounting until actual usage can reconcile.
-    await store.markUnknown?.(reservation);
+    await store.markUnknown?.(reservation, activityDetails('unknown', { usage_status: 'unavailable', ...details }));
   };
   const url = `${UPSTREAM_ORIGIN}/v1/responses`;
   const controller = new AbortController();
@@ -325,6 +337,7 @@ return async function handler(req, res) {
       redirect: "manual",
       signal: controller.signal,
     });
+    providerHttpStatus = upstream.status;
     timing("upstream", upstreamStart);
     if (!upstream.ok) {
       diagnostics("upstream_http", { status: upstream.status });
@@ -332,7 +345,8 @@ return async function handler(req, res) {
       // Definite admission/authentication denials can release the estimate.
       // A server failure or timeout is not proof of zero provider consumption.
       const definiteRejection = [400, 401, 403, 404, 413, 422, 429].includes(upstream.status);
-      try { if (definiteRejection) await refund(); else await recordUnknown(); }
+      const failureDetails = { status: 'error', http_status: res.headersSent ? res.statusCode : upstream.status, error_code: 'upstream_http_error' };
+      try { if (definiteRejection) await refund(failureDetails); else await recordUnknown(failureDetails); }
       catch { diagnostics(definiteRejection ? "refund" : "accounting_unknown", { reason: "storage_unavailable" }); }
       keepalive?.stop();
       if (!res.headersSent) {
@@ -351,10 +365,12 @@ return async function handler(req, res) {
       await streamResponse(upstream, res, format, adapter, { onTerminal: settle });
     } else {
       phase = "collect";
-      const response = await collectResponse(upstream, { onTerminal: settle });
+      let result;
+      await collectResponse(upstream, { onTerminal: settle, validateTerminal(response) {
+        result = format === "chat" ? chatCompletionFromResponse(response, selectedModel.id)
+          : format === "messages" ? messageFromResponse(response, selectedModel.id) : response;
+      } });
       keepalive?.stop();
-      const result = format === "chat" ? chatCompletionFromResponse(response, selectedModel.id)
-        : format === "messages" ? messageFromResponse(response, selectedModel.id) : response;
       if (!res.headersSent) {
         res.statusCode = 200;
         res.setHeader("content-type", "application/json; charset=utf-8");
@@ -366,7 +382,13 @@ return async function handler(req, res) {
     keepalive?.stop();
     const invalidUsage = error.code === "invalid_token_usage" || error.code === "conflicting_token_usage";
     diagnostics(phase, { reason: controller.signal.aborted ? "aborted" : ["invalid_event", "incomplete_stream", "upstream_generation_failed", "invalid_token_usage", "conflicting_token_usage"].includes(error.code) ? error.code : "upstream_request_failed" });
-    try { if (providerStarted) await recordUnknown(); else await refund(); }
+    const clientGone = req.aborted || res.destroyed;
+    const historyFailure = { status: clientGone ? 'cancelled' : 'error',
+      http_status: clientGone ? null : res.headersSent ? res.statusCode : phase === 'settlement' && !invalidUsage ? 503 : 502,
+      error_code: clientGone ? 'client_disconnected' : controller.signal.aborted ? 'upstream_timeout'
+        : invalidUsage ? 'invalid_token_usage' : phase === 'settlement' ? 'token_accounting_unavailable'
+        : ['invalid_event', 'incomplete_stream', 'upstream_generation_failed'].includes(error.code) ? error.code : 'upstream_request_failed' };
+    try { if (providerStarted) await recordUnknown(historyFailure); else await refund(historyFailure); }
     catch { diagnostics("accounting_unknown", { reason: "storage_unavailable" }); }
     if (!res.destroyed && !res.headersSent) {
       res.setHeader("x-klyapi-error-source", invalidUsage ? "upstream_usage" : phase === "settlement" ? "quota_storage" : "upstream_transport");

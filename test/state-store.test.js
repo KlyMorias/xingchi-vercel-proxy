@@ -75,6 +75,34 @@ test("expired credentials and tickets are cleaned during a durable mutation", as
   assert.equal((await store.readState()).sessions.expired, undefined);
 });
 
+test('revoked credentials are retained only for unresolved live tickets and removed after resolution or expiry',async()=>{
+  configure();
+  const store=createStateStore(memoryBlob());
+  const now=Math.floor(Date.now()/1000),day=Math.floor(now/86400);
+  await store.mutateState(draft=>{
+    const owner=draft.users.testadmin.id;
+    for(const name of ['idle','settled','pending','unknown','expired','expired_credential']) {
+      draft.keys[name]={id:'key_'+name,user_id:owner,revoked_at:now-1,expires_at:name==='expired_credential'?now-1:now+86400};
+    }
+    draft.keys.active={id:'key_active',user_id:owner,expires_at:now+86400};
+    for(const name of ['settled','pending','unknown','expired','expired_credential']) {
+      draft.reservations[name]={kind:'tokens',user_id:owner,key_id:'key_'+name,day,
+        status:name==='settled'?'settled':name==='unknown'?'unknown':undefined,
+        hold_expires_at:now+300,expires_at:name==='expired'?now-1:now+600};
+    }
+  });
+  await store.mutateState(()=>{});
+  let saved=await store.readState();
+  assert.equal(saved.keys.idle,undefined);assert.equal(saved.keys.settled,undefined);assert.equal(saved.keys.expired,undefined);
+  assert.ok(saved.keys.pending);assert.ok(saved.keys.unknown);assert.ok(saved.keys.expired_credential,'expired credential still permits late attribution, not authentication');assert.ok(saved.keys.active);
+  await store.mutateState(draft=>{
+    draft.reservations.pending.status='settled';draft.reservations.unknown.status='released';draft.reservations.expired_credential.status='settled';
+  });
+  await store.mutateState(()=>{});
+  saved=await store.readState();
+  assert.equal(saved.keys.pending,undefined);assert.equal(saved.keys.unknown,undefined);assert.equal(saved.keys.expired_credential,undefined);assert.ok(saved.keys.active);
+});
+
 test("transient Blob reads retry without logging SDK messages or stored data", async () => {
   configure();
   const client = memoryBlob();

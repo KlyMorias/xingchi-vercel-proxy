@@ -2,7 +2,7 @@
   "use strict";
 
   const byId = (id) => document.getElementById(id);
-  const state = { user: null, users: [], key: null, secret: null, revealed: false, busy: false, daily: null, minute: null, model: "gpt-6.1-sol", exampleLanguage: "curl", loaded: false, userMode: "create", view: "overview", usersLoadedAt: 0, lastRefreshAt: 0, lastRefreshAttempt: 0, stale: false, clockOffset: 0, resets: {}, remaining: {}, usageStatus: "unavailable" };
+  const state = { user: null, users: [], key: null, keys: [], keyEditId: null, secret: null, revealed: false, busy: false, daily: null, minute: null, model: "gpt-6.1-sol", exampleLanguage: "curl", loaded: false, userMode: "create", view: "overview", usersLoadedAt: 0, lastRefreshAt: 0, lastRefreshAttempt: 0, stale: false, clockOffset: 0, resets: {}, remaining: {}, usageStatus: "unavailable" };
   let toastTimeout;
   let refreshPromise;
   let usersPromise;
@@ -10,6 +10,7 @@
   let countdownTimer;
   let commandIndex = 0;
   let playground;
+  let activity;
   let playgroundPromise;
   let suspended = false;
   let lifecycleRevision = 0;
@@ -67,6 +68,7 @@
   function clearSensitiveKey() {
     state.secret = null;
     state.revealed = false;
+    renderSecret();
     playground?.clearKey?.();
   }
 
@@ -77,12 +79,16 @@
     if (changed) {
       identityRevision++;
       clearSensitiveKey();
+      activity?.clear();
+      state.keys = [];
+      state.key = null;
+      byId("project-key-list").replaceChildren();
       state.users = [];
       state.usersLoadedAt = 0;
       byId("user-list").replaceChildren();
       byId("users-count").textContent = "—";
       byId("user-match-count").textContent = "";
-      for (const id of ["user-dialog", "password-dialog", "command-dialog"]) {
+      for (const id of ["user-dialog", "password-dialog", "command-dialog", "project-keys-dialog"]) {
         if (byId(id).open) byId(id).close();
       }
     }
@@ -121,6 +127,8 @@
     for (const id of ["create-key", "rotate-key", "revoke-key"]) byId(id).disabled = value || !state.loaded;
     byId("retry-keys").disabled = value;
     byId("key-active").setAttribute("aria-busy", String(value));
+    for (const id of ["access-manage-keys", "manage-project-keys", "next-manage-keys", "save-project-key", "project-key-select"]) byId(id).disabled = value || !state.loaded;
+    byId("project-key-list").querySelectorAll("button").forEach(button => { button.disabled = value || button.dataset.current === "true"; });
   }
 
   function updateExample() {
@@ -254,7 +262,9 @@
         tryModel.type = "button";
         tryModel.addEventListener("click", () => { setModel(id); selectView("playground"); });
         footer.append(element("span", "", item.note || "Yanıt süreleri ve araç desteği sağlayıcıya bağlıdır."), use, tryModel);
-        card.append(heading, details, footer);
+        const observed = element("p", "model-observed", "Hesabındaki son kullanım kontrol ediliyor…");
+        observed.dataset.model = id;
+        card.append(heading, details, observed, footer);
         catalog.append(card);
       }
       if (!ids.length) catalog.append(element("p", "users-empty", "Şu anda yapılandırılmış model bulunmuyor."));
@@ -273,6 +283,17 @@
     const needsBalance = selected?.availability === "balance_required";
     byId("setup-model-note").textContent = needsBalance ? selected.note || "Bu model için sağlayıcı hesabında özel bakiye gerekiyor." : "Seçimin yapılandırma dosyasına ve istek örneklerine uygulanır.";
     byId("setup-model-note").classList.toggle("warning", needsBalance);
+  }
+
+  function renderModelHealth(health) {
+    document.querySelectorAll(".model-observed").forEach(node => {
+      const item = Array.isArray(health) ? health.find(item => item.model === node.dataset.model) : null;
+      const time = value => new Intl.DateTimeFormat("tr-TR", {dateStyle:"short",timeStyle:"short"}).format(new Date(value));
+      const lines = [];
+      if (item?.last_success_at && Number.isFinite(Date.parse(item.last_success_at))) lines.push(`Hesabında son başarılı yanıt: ${time(item.last_success_at)}`);
+      if (item?.last_error_at && Number.isFinite(Date.parse(item.last_error_at))) lines.push(`Son hata: ${time(item.last_error_at)}${item.last_error_code ? ` · ${item.last_error_code}` : ""}`);
+      node.textContent = health === null ? "Son kullanım bilgisi alınamadı. Geçmişten yeniden deneyebilirsin." : lines.length ? lines.join(". ") : "Saklanan geçmişte bu modelle doğrulanmış bir yanıtın henüz yok.";
+    });
   }
 
   function setModel(model) {
@@ -303,7 +324,7 @@
     byId("input-token-count").textContent = lowerBound(counts?.input);
     byId("output-token-count").textContent = lowerBound(counts?.output);
     byId("remaining-token-count").textContent = countLabel(remaining);
-    byId("usage-source").textContent = valid ? "Sağlayıcının bildirdiği kullanım · yalnızca bu uygulama" : "Kullanım kaynağı doğrulanamadı";
+    byId("usage-source").textContent = valid ? "Bugün · sağlayıcının bildirdiği tokenlar" : "Kullanım kaynağı doğrulanamadı";
     byId("usage-status").textContent = partial ? "Kısmi kayıt · en az" : valid ? "Sağlayıcı kaydı doğrulandı" : "Kullanım doğrulanamadı";
     byId("usage-status").dataset.state = state.usageStatus;
     const coverage = [];
@@ -311,10 +332,11 @@
     else if (partial) {
       if (accounting.unknown_requests_today > 0) coverage.push(`${formattedNumber(accounting.unknown_requests_today)} isteğin token kullanımı doğrulanamadı.`);
       if (accounting.legacy_usage_unknown) coverage.push("Önceki isteklerin token ayrıntıları bilinmiyor.");
-      coverage.push("Görünen sayılar yalnızca kaydedilen kullanımdır; kullanılabilir kota doğrulanamıyor.");
+      coverage.push("Sayılar kaydedilen en az kullanımdır; kalan kota doğrulanamıyor.");
     } else if (remaining === null) coverage.push("Kaydedilen kullanım doğrulandı; kullanılabilir günlük kota doğrulanamadı.");
-    coverage.push("Günlük sınır uygulama kotasıdır. Sağlayıcının satın alınmış bakiyesi bildirilmez.");
     byId("usage-coverage").textContent = coverage.join(" ");
+    byId("usage-coverage").hidden = !coverage.length;
+    byId("usage-history-link").hidden = !partial;
     const meter = byId("usage-progress");
     meter.hidden = !valid || partial || state.daily === null || state.daily < 1 || remaining === null;
     if (meter.hidden) meter.removeAttribute("value");
@@ -354,12 +376,16 @@
 
   function render(data) {
     synchronizeUser(data.user);
-    const keyChanged = state.key && data.key && ["prefix", "created_at", "expires_at"]
-      .some((field) => state.key[field] !== data.key[field]);
-    const secretMismatch = state.secret && data.key && (typeof data.key.prefix !== "string"
-      || !state.secret.startsWith(data.key.prefix));
-    if (!data.key || keyChanged || secretMismatch) clearSensitiveKey();
-    state.key = data.key || null;
+    state.keys = Array.isArray(data.keys) ? data.keys : data.key ? [data.key] : [];
+    const preferred = data.api_key ? data.key?.id : state.key?.id;
+    const selected = state.keys.find(key => key.id === preferred) || state.keys[0] || null;
+    if (data.api_key) { clearSensitiveKey(); state.key = null; state.secret = data.api_key; state.revealed = false; }
+    const keyChanged = state.key && selected && ["id", "prefix", "created_at", "expires_at"]
+      .some((field) => state.key[field] !== selected[field]);
+    const secretMismatch = state.secret && selected && (typeof selected.prefix !== "string"
+      || !state.secret.startsWith(selected.prefix));
+    if (!selected || keyChanged || secretMismatch) clearSensitiveKey();
+    state.key = selected;
     state.daily = tokenCount(data.limits?.daily_tokens);
     state.minute = tokenCount(data.limits?.requests_per_minute);
     renderModels(data.service);
@@ -381,10 +407,11 @@
     byId("key-error").hidden = true;
     byId("key-empty").hidden = Boolean(state.key);
     byId("key-active").hidden = !state.key;
-    byId("key-badge").textContent = state.key ? "1 aktif anahtar" : "Henüz anahtar yok";
+    byId("key-badge").textContent = state.key ? `${state.keys.length} aktif anahtar` : "Henüz anahtar yok";
     byId("key-badge").classList.toggle("active", Boolean(state.key));
 
     if (state.key) {
+      byId("selected-key-name").textContent = state.key.name || "Kişisel erişim anahtarı";
       const created = dateLabel(state.key.created_at);
       byId("key-created").textContent = created ? `${created} tarihinde oluşturuldu` : "Kişisel erişim anahtarı";
       const expires = dateLabel(state.key.expires_at);
@@ -395,6 +422,10 @@
       state.revealed = false;
       updateExample();
     }
+
+    renderProjectKeys();
+    byId("access-key-name").textContent = state.key?.name || (state.key ? "Kişisel proje" : "İlk projenle başla");
+    byId("access-key-count").textContent = state.keys.length ? `${state.keys.length} aktif anahtar · Tek hesap kotası` : "Adlandırılmış anahtarını oluştur, uygulamanı bağla";
 
     renderService(data.service);
     updateUsageClock();
@@ -433,11 +464,11 @@
     refreshTimer = setTimeout(() => refresh({ background: true }), delay);
   }
 
-  async function request(method) {
-    return api("/api/keys", method, method === "GET" ? undefined : {});
+  async function request(method, payload) {
+    return api("/api/keys", method, method === "GET" ? undefined : payload || {});
   }
 
-  async function api(url, method = "GET", payload) {
+  async function api(url, method = "GET", payload, { responseType = "json" } = {}) {
     if (suspended) throw Object.assign(new Error("Sayfa artık etkin değil."), { code: "page_inactive" });
     const revision = lifecycleRevision;
     const identity = identityRevision;
@@ -458,6 +489,7 @@
       state.user = null;
       identityRevision++;
       clearSensitiveKey();
+      activity?.clear();
       state.users = [];
       state.usersLoadedAt = 0;
       byId("user-list").replaceChildren();
@@ -468,6 +500,7 @@
       throw Object.assign(new Error("Oturumun sona erdi. Yeniden giriş yap."), { status: 401 });
     }
     if (response.status === 204) return null;
+    if (response.ok && responseType === "text") return await response.text();
     let body;
     try { body = await response.json(); } catch { throw new Error("Sunucudan geçerli bir yanıt alınamadı. Biraz sonra yeniden dene."); }
     if (revision !== lifecycleRevision || identity !== identityRevision) throw Object.assign(new Error("Oturum değişti."), { code: "page_inactive" });
@@ -534,54 +567,141 @@
     return refreshPromise;
   }
 
-  async function createKey() {
+  async function createKey(name) {
     if (refreshPromise) await refreshPromise;
     if (suspended || !state.user || state.busy || !state.loaded) return;
     clearMessage();
     setBusy(true);
     try {
-      const data = await request("POST");
-      state.secret = data.api_key || null;
-      state.revealed = false;
+      const data = await request("POST", { name });
       render(data);
+      byId("project-keys-dialog").close();
       announce("Anahtarın oluşturuldu. Tam anahtarını aşağıdaki kopyalama düğmesiyle kaydet.", true);
     } catch (error) {
-      if (error.code !== "page_inactive") announce(error.message);
+      if (error.code !== "page_inactive") {
+        if (byId("project-keys-dialog").open) showFormMessage("project-key-message", error.message);
+        else announce(error.message);
+      }
     } finally {
       setBusy(false);
     }
   }
 
-  async function revokeKey(rotate = false) {
+  async function revokeKey(target = state.key) {
     if (refreshPromise) await refreshPromise;
-    if (suspended || !state.user || state.busy || !state.key) return;
-    const prompt = rotate
-      ? "Mevcut anahtar iptal edilip yenisi oluşturulacak. Eski anahtarı kullanan uygulamaları yeni anahtarla güncellemen gerekecek. Devam edilsin mi?"
-      : "Bu API anahtarı iptal edilecek ve onu kullanan uygulamalar erişimini kaybedecek. Devam edilsin mi?";
+    if (suspended || !state.user || state.busy || !target) return;
+    const prompt = `“${target.name || "Kişisel proje"}” anahtarı iptal edilecek. Bu anahtarı kullanan uygulamalar erişimini kaybeder; diğer proje anahtarları çalışmaya devam eder. Devam edilsin mi?`;
     if (!window.confirm(prompt)) return;
     clearMessage();
     setBusy(true);
     try {
-      await request("DELETE");
-      state.key = null;
-      clearSensitiveKey();
-      updateExample();
-      if (rotate) {
-        const data = await request("POST");
-        state.secret = data.api_key || null;
-        render(data);
-        announce("Yeni anahtarın oluşturuldu. Uygulamalarındaki eski anahtarı yenisiyle değiştir.", true);
-      } else {
-        render(await request("GET"));
-        announce("Anahtarın iptal edildi.", true);
-      }
+      await request("DELETE", target.id ? { id: target.id } : {});
+      if (target.id === state.key?.id) { state.key = null; clearSensitiveKey(); updateExample(); }
+      render(await request("GET"));
+      announce("Yalnızca seçtiğin proje anahtarı iptal edildi.", true);
+      if (byId("project-keys-dialog").open) showFormMessage("project-key-message", "Seçtiğin anahtar iptal edildi; diğer projelerin erişimi korunuyor.");
     } catch (error) {
       if (error.code === "page_inactive") return;
       await refresh({ allowBusy: true });
       announce(error.message);
+      if (byId("project-keys-dialog").open) showFormMessage("project-key-message", error.message);
     } finally {
       setBusy(false);
     }
+  }
+
+  function resetKeyEditor() {
+    state.keyEditId = null;
+    byId("project-key-name").value = "";
+    byId("project-key-name-label").textContent = "Yeni projenin adı";
+    byId("save-project-key").textContent = "Anahtar oluştur";
+    byId("cancel-key-rename").hidden = true;
+    byId("project-key-form-note").textContent = "Tam anahtar yalnızca oluşturulduğunda gösterilir; güvenli bir yerde sakla.";
+  }
+
+  function openProjectKeys({ replacement = false } = {}) {
+    if (!state.loaded || !state.user) return;
+    resetKeyEditor();
+    byId("project-key-message").hidden = true;
+    if (replacement && state.key) {
+      byId("project-key-name").value = `${(state.key.name || "Kişisel proje").slice(0,41).trimEnd()} - yeni`;
+      byId("project-key-form-note").textContent = "Yeni anahtar önce oluşturulur. Uygulamanı taşıdıktan sonra eski anahtarı ayrıca iptal edebilirsin; şimdi iptal edilmeyecek.";
+    }
+    renderProjectKeys();
+    if (!byId("project-keys-dialog").open) byId("project-keys-dialog").showModal();
+    byId("project-key-name").focus();
+  }
+
+  function selectProjectKey(key) {
+    if (state.key?.id !== key.id) clearSensitiveKey();
+    state.key = key;
+    byId("selected-key-name").textContent = key.name || "Kişisel erişim anahtarı";
+    byId("key-created").textContent = `${dateLabel(key.created_at)} tarihinde oluşturuldu`;
+    byId("key-expiry").textContent = `Geçerlilik: ${dateLabel(key.expires_at)}`;
+    byId("access-key-name").textContent = key.name || "Kişisel proje";
+    renderSecret();
+    renderProjectKeys();
+    if (byId("project-keys-dialog").open) byId("project-keys-dialog").close();
+  }
+
+  function renderProjectKeys() {
+    const select = byId("project-key-select");
+    select.replaceChildren();
+    for (const key of state.keys) {
+      const option = element("option", "", key.name || "Kişisel proje");
+      option.value = key.id || "legacy";
+      select.append(option);
+    }
+    select.value = state.key?.id || "legacy";
+    select.hidden = state.keys.length < 2;
+    const list = byId("project-key-list");
+    list.replaceChildren();
+    if (!state.keys.length) list.append(element("p", "users-empty", "Henüz bir proje anahtarın yok. İlk projenin adını yazıp oluşturabilirsin."));
+    for (const key of state.keys) {
+      const row = element("article", "project-key-row");
+      const identity = element("div", "project-key-identity");
+      identity.append(element("strong", "", key.name || "Kişisel proje"), element("code", "", `${key.prefix}••••••••`), element("small", "", `Geçerlilik: ${dateLabel(key.expires_at) || "—"}`));
+      const usage = element("div", "project-key-usage");
+      const known = usageCounts(key, "_today");
+      const partial = key.accounting?.status === "partial";
+      usage.append(element("span", "", "Bugün kaydedilen"), element("strong", "", known ? `${partial ? "En az " : ""}${formattedNumber(known.total)} token` : "Doğrulanmış kayıt yok"));
+      if (known) usage.append(element("small", "", `${formattedNumber(known.input)} giriş · ${formattedNumber(known.output)} çıkış`));
+      if (key.accounting?.legacy_usage_unknown || key.accounting?.historical_usage_unknown) usage.append(element("small", "project-key-warning", "İzleme öncesindeki kullanım bu anahtara atanamaz."));
+      const actions = element("div", "project-key-actions");
+      const selected = actionButton(state.key?.id === key.id ? "Seçili" : "Seç", () => selectProjectKey(key), state.key?.id === key.id);
+      selected.dataset.current = String(state.key?.id === key.id);
+      actions.append(selected);
+      const rename = actionButton("Adını düzenle", () => {
+        state.keyEditId = key.id;
+        byId("project-key-name").value = key.name || "Kişisel proje";
+        byId("project-key-name-label").textContent = "Projenin yeni adı";
+        byId("save-project-key").textContent = "Adı kaydet";
+        byId("cancel-key-rename").hidden = false;
+        byId("project-key-form-note").textContent = "Yalnızca adı değişir; API anahtarı ve bağlı uygulamalar etkilenmez.";
+        byId("project-key-name").focus();
+      });
+      actions.append(rename, actionButton("İptal et", () => revokeKey(key)));
+      row.append(identity, usage, actions);
+      list.append(row);
+    }
+    byId("project-keys-title").textContent = `Proje anahtarların (${state.keys.length}/10)`;
+  }
+
+  async function saveProjectKey(event) {
+    event.preventDefault();
+    if (state.busy || !byId("project-key-form").reportValidity()) return;
+    const name = byId("project-key-name").value.normalize("NFC").trim().replace(/ {2,}/g, " ");
+    if (!/^[\p{L}\p{M}\p{N} _().-]{1,48}$/u.test(name) || /(?:kly_[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{12,})/.test(name)) { showFormMessage("project-key-message", "Proje adı 1–48 harf, rakam, boşluk veya . _ ( ) - içermeli; anahtarın kendisini yazma."); return; }
+    byId("project-key-message").hidden = true;
+    if (!state.keyEditId) { await createKey(name); return; }
+    setBusy(true);
+    try {
+      const data = await request("PATCH", { id: state.keyEditId, name });
+      render(data);
+      resetKeyEditor();
+      toast("Projenin adı güncellendi");
+    } catch (error) { if (error.code !== "page_inactive") showFormMessage("project-key-message", error.message); }
+    finally { setBusy(false); }
   }
 
   async function copy(text, successMessage) {
@@ -634,12 +754,13 @@
     if (hash === "#models") return "models";
     if (hash === "#playground") return "playground";
     if (hash === "#users") return "users";
+    if (hash === "#activity") return "activity";
     if (["#setup", "#codex-setup", "#baslarken"].includes(hash)) return "setup";
     return "overview";
   }
 
   function selectView(view, { historyMode = "push", focus = true } = {}) {
-    if (!["overview", "models", "setup", "users", "playground"].includes(view)) view = "overview";
+    if (!["overview", "models", "setup", "users", "playground", "activity"].includes(view)) view = "overview";
     if (view === "users" && state.user?.role !== "admin") view = "overview";
     const changed = state.view !== view;
     state.view = view;
@@ -647,32 +768,37 @@
     const models = view === "models";
     const setup = view === "setup";
     const testing = view === "playground";
-    byId("overview-view").hidden = users || models || setup || testing;
+    const history = view === "activity";
+    byId("overview-view").hidden = users || models || setup || testing || history;
+    byId("activity-view").hidden = !history;
     byId("models-view").hidden = !models;
     byId("users-view").hidden = !users;
     byId("setup-view").hidden = !setup;
     if (byId("playground-view")) byId("playground-view").hidden = !testing;
-    byId("nav-overview").classList.toggle("current", !users && !models && !setup && !testing);
+    byId("nav-overview").classList.toggle("current", view === "overview");
+    byId("nav-activity").classList.toggle("current", history);
     byId("nav-models").classList.toggle("current", models);
     byId("nav-start").classList.toggle("current", setup);
     byId("nav-users").classList.toggle("current", users);
     byId("nav-playground")?.classList.toggle("current", testing);
-    for (const [id, active] of [["nav-overview", view === "overview"], ["nav-models", models], ["nav-start", setup], ["nav-users", users], ["nav-playground", testing]]) {
+    for (const [id, active] of [["nav-overview", view === "overview"], ["nav-models", models], ["nav-start", setup], ["nav-users", users], ["nav-playground", testing], ["nav-activity", history]]) {
       if (!byId(id)) continue;
       if (active) byId(id).setAttribute("aria-current", "page");
       else byId(id).removeAttribute("aria-current");
     }
-    byId("breadcrumb-page").textContent = users ? "Kullanıcılar" : models ? "Modeller" : setup ? "Kurulum" : testing ? "Deneme alanı" : "Genel bakış";
-    document.title = `${users ? "Kullanıcılar" : models ? "Modeller" : setup ? "Kurulum" : testing ? "Deneme alanı" : "API Anahtarın"} · KlyAPI`;
+    byId("breadcrumb-page").textContent = users ? "Kullanıcılar" : models ? "Modeller" : setup ? "Kurulum" : testing ? "Deneme alanı" : history ? "İstek geçmişi" : "Genel bakış";
+    document.title = `${byId("breadcrumb-page").textContent} · KlyAPI`;
     const hash = `#${view}`;
     if (historyMode !== "none" && window.location.hash !== hash) window.history[historyMode === "replace" ? "replaceState" : "pushState"](null, "", hash);
     if (changed && focus) {
-      const heading = byId(users ? "users-title" : models ? "models-title" : setup ? "start-heading" : testing ? "playground-title" : "page-title");
+      const heading = byId(users ? "users-title" : models ? "models-title" : setup ? "start-heading" : testing ? "playground-title" : history ? "activity-title" : "page-title");
       if (heading) { heading.tabIndex = -1; heading.focus({ preventScroll: true }); }
       window.scrollTo({ top: 0, behavior: "instant" });
     }
     if (users) loadUsers();
     if (testing) ensurePlayground();
+    if (history) activity?.load();
+    if (models) activity?.loadHealth();
     scheduleRefresh();
   }
 
@@ -681,7 +807,7 @@
     const initialize = () => {
       if (suspended || playground) return;
       playground = window.KlyPlayground?.init?.({ getKey: () => state.secret, getModels: () => modelCatalog,
-        onComplete: () => { if (!suspended && state.user) refresh({ background: true }); }, onAnnounce: toast });
+        onComplete: () => { activity?.invalidate(); if (!suspended && state.user) refresh({ background: true }); }, onAnnounce: toast });
       playground?.setModels?.(modelCatalog);
       playground?.setSelectedModel?.(state.model);
     };
@@ -883,6 +1009,7 @@
       state.user = null;
       identityRevision++;
       clearSensitiveKey();
+      activity?.clear();
       state.users = [];
       state.usersLoadedAt = 0;
       byId("user-list").replaceChildren();
@@ -898,6 +1025,7 @@
     { view: "models", label: "Modeller", description: "Kullanılabilir model bilgileri", icon: "i-code" },
     { view: "playground", label: "Deneme alanı", description: "API bağlantısını ve model yanıtını dene", icon: "i-bolt" },
     { view: "setup", label: "Kurulum", description: "Codex yapılandırması ve API bağlantısı", icon: "i-desktop" },
+    { view: "activity", label: "İstek geçmişi", description: "Proje, model, süre, hata ve token kayıtları", icon: "i-clock" },
     { view: "users", label: "Kullanıcılar", description: "Hesap ve kota yönetimi", icon: "i-users", admin: true },
   ];
 
@@ -950,6 +1078,10 @@
   byId("nav-models").addEventListener("click", () => selectView("models"));
   byId("nav-users").addEventListener("click", () => selectView("users"));
   byId("nav-playground")?.addEventListener("click", () => selectView("playground"));
+  byId("nav-activity").addEventListener("click", () => selectView("activity"));
+  byId("access-try-model").addEventListener("click", () => selectView("playground"));
+  byId("next-activity").addEventListener("click", () => selectView("activity"));
+  byId("usage-history-link").addEventListener("click", () => selectView("activity"));
   byId("setup-model").addEventListener("change", (event) => setModel(event.target.value));
   byId("aside-model-link").addEventListener("click", () => selectView("models"));
   byId("footer-key-link").addEventListener("click", (event) => {
@@ -995,10 +1127,16 @@
   document.querySelectorAll("[data-close-dialog]").forEach((button) => button.addEventListener("click", () => byId(button.dataset.closeDialog).close()));
   for (const id of ["user-dialog", "password-dialog"]) byId(id).addEventListener("close", () => byId(id).querySelectorAll('input[type="password"]').forEach((input) => { input.value = ""; }));
 
-  byId("create-key").addEventListener("click", createKey);
+  byId("create-key").addEventListener("click", () => openProjectKeys());
+  byId("access-manage-keys").addEventListener("click", () => openProjectKeys());
+  byId("manage-project-keys").addEventListener("click", () => openProjectKeys());
+  byId("next-manage-keys").addEventListener("click", () => openProjectKeys());
+  byId("project-key-form").addEventListener("submit", saveProjectKey);
+  byId("cancel-key-rename").addEventListener("click", resetKeyEditor);
+  byId("project-key-select").addEventListener("change", event => { const key = state.keys.find(key => (key.id || "legacy") === event.target.value); if (key) selectProjectKey(key); });
   byId("retry-keys").addEventListener("click", refresh);
-  byId("rotate-key").addEventListener("click", () => revokeKey(true));
-  byId("revoke-key").addEventListener("click", () => revokeKey(false));
+  byId("rotate-key").addEventListener("click", () => openProjectKeys({ replacement: true }));
+  byId("revoke-key").addEventListener("click", () => revokeKey());
   byId("reveal-key").addEventListener("click", () => { state.revealed = !state.revealed; renderSecret(); });
   byId("copy-key").addEventListener("click", () => { if (state.secret) copy(state.secret, "API anahtarın kopyalandı"); });
   document.querySelectorAll("[data-example-language]").forEach((button) => button.addEventListener("click", () => {
@@ -1023,6 +1161,8 @@
     for (const url of downloadUrls) URL.revokeObjectURL(url);
     downloadUrls.clear();
     clearSensitiveKey();
+    activity?.clear();
+    if (byId("project-keys-dialog").open) byId("project-keys-dialog").close();
     for (const input of document.querySelectorAll('input[type="password"]')) input.value = "";
     if (state.key) renderSecret();
     else updateExample();
@@ -1037,6 +1177,7 @@
       authenticate();
     } else scheduleRefresh();
   });
+  activity = window.KlyActivity?.init?.({ api, onTry: () => selectView("playground"), onHealth: renderModelHealth });
   setBusy(false);
   authenticate();
 })();

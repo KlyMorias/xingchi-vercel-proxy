@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" fill="none" role="img" aria-labelledby="mark-title mark-description">
+  <title id="mark-title">KlyAPI</title>
+  <desc id="mark-description">Bir bağlantı noktasından açılan iki kolun oluşturduğu K monogramı.</desc>
+  <rect width="40" height="40" rx="11" fill="#F2F2EE"/>
+  <g stroke="#141414" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M11.5 9.5V30.5M11.5 20H18.5L28.5 10.5M18.5 20L28.5 29.5"/>
+    <circle cx="18.5" cy="20" r="2.6" fill="#F2F2EE" stroke-width="2.5"/>
+  </g>
+  <circle cx="28.5" cy="10.5" r="2.7" fill="#141414"/>
+  <circle cx="28.5" cy="29.5" r="2.7" fill="#141414"/>
+</svg>

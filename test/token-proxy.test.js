@@ -154,7 +154,11 @@ test("valid provider usage on failed and cancelled terminals is recorded while g
           reserve: async () => ({ ok: true, reservation: { id: "test" } }),
           settle: async (_ticket, usage, details) => {
             assert.deepEqual(usage, { input_tokens: 17, output_tokens: 11, total_tokens: 28 });
-            assert.deepEqual(details, { response_id: "resp_token_test", model: "gpt-6.1-sol" });
+            assert.deepEqual({ response_id: details.response_id, model: details.model }, { response_id: "resp_token_test", model: "gpt-6.1-sol" });
+            assert.equal(details.activity.status, status === 'cancelled' ? 'cancelled' : 'error');
+            assert.equal(details.activity.usage_status, 'verified');
+            assert.equal(Number.isSafeInteger(details.activity.latency_ms), true);
+            assert.equal(JSON.stringify(details).includes('private provider diagnostic'), false);
             calls.push("settle");
           },
           release: async () => assert.fail("Known generated usage must not be refunded"),
